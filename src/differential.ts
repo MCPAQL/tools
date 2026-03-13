@@ -86,6 +86,9 @@ export async function runDifferentialValidation(options: {
 
   const sourceByName = new Map(sourceOperations.map((operation) => [operation.operation_name, operation]));
   const adapterByName = new Map(adapterOperations.map((operation) => [operation.name, operation]));
+  const syntheticOperations = adapterOperations
+    .filter((operation) => operation.name === "introspect" && !sourceByName.has(operation.name))
+    .map((operation) => operation.name);
 
   const missingOperations = sourceOperations
     .filter((operation) => !adapterByName.has(operation.operation_name))
@@ -140,6 +143,12 @@ export async function runDifferentialValidation(options: {
       adapter_operation_count: adapterOperations.length,
       missing_operations: missingOperations,
       extra_operations: extraOperations,
+      notes:
+        syntheticOperations.length > 0
+          ? [
+              `adapter_operation_count includes ${syntheticOperations.length} synthetic adapter operation(s): ${syntheticOperations.join(", ")}.`,
+            ]
+          : undefined,
     },
     operations,
   };

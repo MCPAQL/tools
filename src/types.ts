@@ -2,6 +2,12 @@ export type EndpointCategory = "CREATE" | "READ" | "UPDATE" | "DELETE" | "EXECUT
 
 export type DangerLevel = "safe" | "reversible" | "destructive" | "dangerous" | "forbidden";
 
+export type InferenceSource =
+  | "direct_source_metadata"
+  | "deterministic_normalization"
+  | "heuristic_classification"
+  | "manual_override";
+
 export interface InterrogationConfig {
   name: string;
   server_url: string;
@@ -68,11 +74,18 @@ export interface NormalizedOperation {
     description?: string;
     annotations?: string[];
     input_schema_present: boolean;
+    inference_sources?: {
+      operation_name?: InferenceSource;
+      description?: InferenceSource;
+      endpoint?: InferenceSource;
+      danger_level?: InferenceSource;
+      maps_to?: InferenceSource;
+    };
   };
 }
 
 export interface DiscoveryBundle {
-  schema_version: "1.0";
+  schema_version: "1.0.0-draft";
   source: {
     name: string;
     server_url: string;
@@ -94,6 +107,7 @@ export interface DiscoveryBundle {
   };
   raw_capture: {
     tools: unknown[];
+    [key: string]: unknown;
   };
   normalized_bundle: {
     operations: NormalizedOperation[];
@@ -115,6 +129,7 @@ export interface DifferentialReport {
     adapter_operation_count: number;
     missing_operations: string[];
     extra_operations: string[];
+    notes?: string[];
   };
   operations: DiffOperationResult[];
 }

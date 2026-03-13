@@ -8,6 +8,7 @@ import type {
   DangerLevel,
   DiscoveryBundle,
   DiscoveryParam,
+  InferenceSource,
   DiscoveryWarning,
   EndpointCategory,
   InterrogationConfig,
@@ -122,12 +123,16 @@ function normalizeParams(tool: RawTool): DiscoveryParam[] {
 function normalizeTool(tool: RawTool, warnings: DiscoveryWarning[]): NormalizedOperation {
   const { endpoint, confidence, reviewReasons } = classifyEndpoint(tool);
   const params = normalizeParams(tool);
+  const normalizedOperationName = normalizeSnakeCase(tool.name);
+  const operationNameSource: InferenceSource =
+    tool.name === normalizedOperationName ? "direct_source_metadata" : "deterministic_normalization";
+  const descriptionSource: InferenceSource = tool.description ? "direct_source_metadata" : "heuristic_classification";
 
-  if (tool.name !== normalizeSnakeCase(tool.name)) {
+  if (tool.name !== normalizedOperationName) {
     warnings.push({
       code: "NAME_NORMALIZED",
       severity: "info",
-      message: `Tool '${tool.name}' was normalized to snake_case operation name '${normalizeSnakeCase(tool.name)}'.`,
+      message: `Tool '${tool.name}' was normalized to snake_case operation name '${normalizedOperationName}'.`,
       tool: tool.name,
       heuristic: "snake_case_normalization",
     });
@@ -158,7 +163,7 @@ function normalizeTool(tool: RawTool, warnings: DiscoveryWarning[]): NormalizedO
 
   return {
     source_tool_name: tool.name,
-    operation_name: normalizeSnakeCase(tool.name),
+    operation_name: normalizedOperationName,
     title: typeof tool.annotations?.title === "string" ? tool.annotations.title : undefined,
     description: tool.description ?? `Proxy for upstream MCP tool '${tool.name}'.`,
     endpoint,
@@ -178,6 +183,13 @@ function normalizeTool(tool: RawTool, warnings: DiscoveryWarning[]): NormalizedO
       description: tool.description ? "description" : undefined,
       annotations: tool.annotations ? Object.keys(tool.annotations) : undefined,
       input_schema_present: Boolean(tool.inputSchema),
+      inference_sources: {
+        operation_name: operationNameSource,
+        description: descriptionSource,
+        endpoint: "heuristic_classification",
+        danger_level: "heuristic_classification",
+        maps_to: "deterministic_normalization",
+      },
     },
   };
 }
@@ -233,7 +245,7 @@ export async function interrogateServer(config: InterrogationConfig): Promise<Di
   const operations = rawTools.map((tool) => normalizeTool(tool, warnings));
 
   const bundle: DiscoveryBundle = {
-    schema_version: "1.0",
+    schema_version: "1.0.0-draft",
     source: {
       name: config.name,
       server_url: config.server_url,

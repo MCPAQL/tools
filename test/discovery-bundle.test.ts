@@ -57,6 +57,7 @@ test("github discovery bundle validates and preserves provenance-bearing normali
   const validate = ajv.compile(schema);
 
   assert.equal(validate(bundle), true, validate.errors ? ajv.errorsText(validate.errors) : "bundle should validate");
+  assert.equal(bundle.schema_version, "1.0.0-draft");
   assert.equal(bundle.raw_capture.tools.length, bundle.normalized_bundle.operations.length);
   assert.equal(bundle.raw_capture.tools.length, 43);
   assert.ok(bundle.normalized_bundle.warnings.length > 0);
@@ -73,4 +74,5 @@ test("github discovery bundle validates and preserves provenance-bearing normali
   assert.equal(operation?.needs_review, true);
   assert.equal(operation?.endpoint, "UPDATE");
   assert.equal(operation?.provenance.input_schema_present, true);
+  assert.equal(operation?.provenance.inference_sources?.endpoint, "heuristic_classification");
 });
