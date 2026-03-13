@@ -1,0 +1,279 @@
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { readFile } from "node:fs/promises";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+
+import type {
+  DangerLevel,
+  DiscoveryBundle,
+  DiscoveryParam,
+  DiscoveryWarning,
+  EndpointCategory,
+  InterrogationConfig,
+  NormalizedOperation,
+} from "./types.js";
+import { deepRedact, normalizeSnakeCase, writeJsonFile } from "./shared.js";
+
+const execFileAsync = promisify(execFile);
+
+interface RawTool {
+  name: string;
+  description?: string;
+  annotations?: Record<string, unknown>;
+  inputSchema?: {
+    type?: string;
+    properties?: Record<string, Record<string, unknown>>;
+    required?: string[];
+  };
+}
+
+function classifyEndpoint(tool: RawTool): {
+  endpoint: EndpointCategory;
+  confidence: "high" | "medium" | "low";
+  reviewReasons: string[];
+} {
+  const name = tool.name;
+  const description = `${tool.description ?? ""} ${String(tool.annotations?.title ?? "")}`.toLowerCase();
+  const reviewReasons: string[] = [];
+
+  const strongPrefix = (prefixes: string[]): boolean => prefixes.some((prefix) => name.startsWith(prefix));
+  const contains = (needles: string[]): boolean => needles.some((needle) => description.includes(needle));
+
+  if (strongPrefix(["get_", "list_", "search_"]) || name.endsWith("_read")) {
+    return { endpoint: "READ", confidence: "high", reviewReasons };
+  }
+
+  if (strongPrefix(["delete_", "remove_"])) {
+    return { endpoint: "DELETE", confidence: "high", reviewReasons };
+  }
+
+  if (strongPrefix(["update_"]) || name.endsWith("_write")) {
+    if (name.endsWith("_write")) {
+      reviewReasons.push("Write suffix is semantically broad and may hide create/update behavior.");
+      return { endpoint: "UPDATE", confidence: "medium", reviewReasons };
+    }
+    return { endpoint: "UPDATE", confidence: "high", reviewReasons };
+  }
+
+  if (strongPrefix(["create_", "add_", "fork_", "assign_"])) {
+    if (name.startsWith("create_or_update_")) {
+      reviewReasons.push("Tool name spans both create and update semantics.");
+      return { endpoint: "UPDATE", confidence: "low", reviewReasons };
+    }
+    return { endpoint: "CREATE", confidence: "high", reviewReasons };
+  }
+
+  if (strongPrefix(["merge_", "request_", "push_"])) {
+    reviewReasons.push("Action-oriented tool classified as EXECUTE conservatively.");
+    return { endpoint: "EXECUTE", confidence: "medium", reviewReasons };
+  }
+
+  if (contains(["merge", "request review", "run", "execute"])) {
+    reviewReasons.push("Description implies workflow execution.");
+    return { endpoint: "EXECUTE", confidence: "medium", reviewReasons };
+  }
+
+  reviewReasons.push("No strong semantic signal found in tool name or description.");
+  return { endpoint: "READ", confidence: "low", reviewReasons };
+}
+
+function classifyDanger(endpoint: EndpointCategory): DangerLevel {
+  switch (endpoint) {
+    case "READ":
+      return "safe";
+    case "CREATE":
+    case "UPDATE":
+      return "reversible";
+    case "DELETE":
+      return "destructive";
+    case "EXECUTE":
+      return "dangerous";
+  }
+}
+
+function normalizeParams(tool: RawTool): DiscoveryParam[] {
+  const properties = tool.inputSchema?.properties ?? {};
+  const required = new Set(tool.inputSchema?.required ?? []);
+
+  return Object.entries(properties).map(([name, schema]) => {
+    const entry = schema as Record<string, unknown>;
+    const enumValues = Array.isArray(entry.enum)
+      ? entry.enum.filter((value): value is string => typeof value === "string")
+      : undefined;
+
+    return {
+      name: normalizeSnakeCase(name),
+      original_name: name,
+      type: typeof entry.type === "string" ? entry.type : "object",
+      required: required.has(name),
+      description: typeof entry.description === "string" ? entry.description : undefined,
+      default: entry.default,
+      enum: enumValues,
+      minimum: typeof entry.minimum === "number" ? entry.minimum : undefined,
+      maximum: typeof entry.maximum === "number" ? entry.maximum : undefined,
+      pattern: typeof entry.pattern === "string" ? entry.pattern : undefined,
+      format: typeof entry.format === "string" ? entry.format : undefined,
+      source_path: `inputSchema.properties.${name}`,
+    };
+  });
+}
+
+function normalizeTool(tool: RawTool, warnings: DiscoveryWarning[]): NormalizedOperation {
+  const { endpoint, confidence, reviewReasons } = classifyEndpoint(tool);
+  const params = normalizeParams(tool);
+
+  if (tool.name !== normalizeSnakeCase(tool.name)) {
+    warnings.push({
+      code: "NAME_NORMALIZED",
+      severity: "info",
+      message: `Tool '${tool.name}' was normalized to snake_case operation name '${normalizeSnakeCase(tool.name)}'.`,
+      tool: tool.name,
+      heuristic: "snake_case_normalization",
+    });
+  }
+
+  for (const reason of reviewReasons) {
+    warnings.push({
+      code: "REVIEW_REQUIRED",
+      severity: confidence === "low" ? "warning" : "info",
+      message: reason,
+      tool: tool.name,
+      heuristic: "endpoint_classification",
+    });
+  }
+
+  for (const param of params) {
+    if (param.name !== param.original_name) {
+      warnings.push({
+        code: "PARAM_NAME_NORMALIZED",
+        severity: "info",
+        message: `Parameter '${param.original_name}' was normalized to '${param.name}'.`,
+        tool: tool.name,
+        field: param.original_name,
+        heuristic: "snake_case_normalization",
+      });
+    }
+  }
+
+  return {
+    source_tool_name: tool.name,
+    operation_name: normalizeSnakeCase(tool.name),
+    title: typeof tool.annotations?.title === "string" ? tool.annotations.title : undefined,
+    description: tool.description ?? `Proxy for upstream MCP tool '${tool.name}'.`,
+    endpoint,
+    endpoint_confidence: confidence,
+    danger_level: classifyDanger(endpoint),
+    needs_review: reviewReasons.length > 0,
+    review_reasons: reviewReasons,
+    params,
+    maps_to: `tool:${tool.name}`,
+    returns: {
+      type: "object",
+      name: "WrappedToolResult",
+      description: "Wrapped upstream MCP tool result preserving content and structured payloads.",
+    },
+    provenance: {
+      name: "name",
+      description: tool.description ? "description" : undefined,
+      annotations: tool.annotations ? Object.keys(tool.annotations) : undefined,
+      input_schema_present: Boolean(tool.inputSchema),
+    },
+  };
+}
+
+async function resolveAuthHeaders(config: InterrogationConfig): Promise<Record<string, string>> {
+  const headers: Record<string, string> = { ...(config.headers ?? {}) };
+
+  if (!config.auth || config.auth.type !== "bearer") {
+    return headers;
+  }
+
+  const header = config.auth.header ?? "Authorization";
+  const prefix = config.auth.prefix ?? "Bearer ";
+  let token: string | undefined;
+
+  if (config.auth.token_env) {
+    token = process.env[config.auth.token_env];
+  }
+
+  if (!token && config.auth.token_command) {
+    const { stdout } = await execFileAsync("/bin/zsh", ["-lc", config.auth.token_command], {
+      env: process.env,
+    });
+    token = stdout.trim();
+  }
+
+  if (!token) {
+    throw new Error("No bearer token resolved from token_env or token_command.");
+  }
+
+  headers[header] = `${prefix}${token}`;
+  return headers;
+}
+
+export async function loadConfig(configPath: string): Promise<InterrogationConfig> {
+  const content = await readFile(configPath, "utf8");
+  return JSON.parse(content) as InterrogationConfig;
+}
+
+export async function interrogateServer(config: InterrogationConfig): Promise<DiscoveryBundle> {
+  const requestHeaders = await resolveAuthHeaders(config);
+  const client = new Client({ name: "mcpaql-interrogate", version: "0.1.0" });
+  const transport = new StreamableHTTPClientTransport(new URL(config.server_url), {
+    requestInit: {
+      headers: requestHeaders,
+    },
+  });
+
+  await client.connect(transport);
+  const toolsResponse = await client.listTools();
+  const rawTools = toolsResponse.tools as unknown as RawTool[];
+  const warnings: DiscoveryWarning[] = [];
+  const operations = rawTools.map((tool) => normalizeTool(tool, warnings));
+
+  const bundle: DiscoveryBundle = {
+    schema_version: "1.0",
+    source: {
+      name: config.name,
+      server_url: config.server_url,
+      transport: "streamable_http",
+      captured_at: new Date().toISOString(),
+      server: {
+        name: client.getServerVersion()?.name,
+        version: client.getServerVersion()?.version,
+        title: client.getServerVersion()?.title,
+      },
+      auth: {
+        type: config.auth?.type ?? "none",
+        header: config.auth?.header ?? "Authorization",
+        prefix: config.auth?.prefix ?? "Bearer ",
+        token_env: config.auth?.token_env,
+        token_command: config.auth?.token_command,
+      },
+      capture_config_redacted: deepRedact(config),
+    },
+    raw_capture: {
+      tools: rawTools,
+    },
+    normalized_bundle: {
+      operations,
+      warnings,
+    },
+  };
+
+  await transport.close();
+  return bundle;
+}
+
+export async function persistBundle(bundle: DiscoveryBundle, outDir: string): Promise<void> {
+  await writeJsonFile(`${outDir}/raw-tools-list.json`, bundle.raw_capture.tools);
+  await writeJsonFile(`${outDir}/discovery-bundle.json`, bundle);
+  await writeJsonFile(`${outDir}/warnings.json`, bundle.normalized_bundle.warnings);
+  await writeJsonFile(`${outDir}/capture-metadata.json`, {
+    schema_version: bundle.schema_version,
+    source: bundle.source,
+    tool_count: bundle.normalized_bundle.operations.length,
+    warning_count: bundle.normalized_bundle.warnings.length,
+  });
+}

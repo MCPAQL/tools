@@ -1,0 +1,129 @@
+export type EndpointCategory = "CREATE" | "READ" | "UPDATE" | "DELETE" | "EXECUTE";
+
+export type DangerLevel = "safe" | "reversible" | "destructive" | "dangerous" | "forbidden";
+
+export interface InterrogationConfig {
+  name: string;
+  server_url: string;
+  transport: {
+    type: "streamable_http";
+  };
+  auth?: {
+    type: "bearer";
+    token_env?: string;
+    token_command?: string;
+    header?: string;
+    prefix?: string;
+  };
+  headers?: Record<string, string>;
+  sample_operations?: Array<{
+    tool: string;
+    arguments?: Record<string, unknown>;
+  }>;
+}
+
+export interface DiscoveryWarning {
+  code: string;
+  severity: "info" | "warning" | "error";
+  message: string;
+  tool?: string;
+  field?: string;
+  heuristic?: string;
+}
+
+export interface DiscoveryParam {
+  name: string;
+  original_name: string;
+  type: string;
+  required: boolean;
+  description?: string;
+  default?: unknown;
+  enum?: string[];
+  minimum?: number;
+  maximum?: number;
+  pattern?: string;
+  format?: string;
+  source_path: string;
+}
+
+export interface NormalizedOperation {
+  source_tool_name: string;
+  operation_name: string;
+  title?: string;
+  description: string;
+  endpoint: EndpointCategory;
+  endpoint_confidence: "high" | "medium" | "low";
+  danger_level: DangerLevel;
+  needs_review: boolean;
+  review_reasons: string[];
+  params: DiscoveryParam[];
+  maps_to: string;
+  returns: {
+    type: "object";
+    name: "WrappedToolResult";
+    description: string;
+  };
+  provenance: {
+    name: string;
+    description?: string;
+    annotations?: string[];
+    input_schema_present: boolean;
+  };
+}
+
+export interface DiscoveryBundle {
+  schema_version: "1.0";
+  source: {
+    name: string;
+    server_url: string;
+    transport: "streamable_http";
+    captured_at: string;
+    server: {
+      name?: string;
+      version?: string;
+      title?: string;
+    };
+    auth: {
+      type: "bearer" | "none";
+      header?: string;
+      prefix?: string;
+      token_env?: string;
+      token_command?: string;
+    };
+    capture_config_redacted: InterrogationConfig;
+  };
+  raw_capture: {
+    tools: unknown[];
+  };
+  normalized_bundle: {
+    operations: NormalizedOperation[];
+    warnings: DiscoveryWarning[];
+  };
+}
+
+export interface DiffOperationResult {
+  operation: string;
+  endpoint_match: boolean;
+  parameter_names_match: boolean;
+  missing_parameters: string[];
+  extra_parameters: string[];
+}
+
+export interface DifferentialReport {
+  summary: {
+    source_operation_count: number;
+    adapter_operation_count: number;
+    missing_operations: string[];
+    extra_operations: string[];
+  };
+  operations: DiffOperationResult[];
+}
+
+export interface ConformanceReport {
+  passed: boolean;
+  checks: Array<{
+    name: string;
+    passed: boolean;
+    detail: string;
+  }>;
+}
