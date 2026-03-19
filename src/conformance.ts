@@ -24,7 +24,7 @@ const ajv = new AjvCtor({ allErrors: true, strict: false });
 addFormatsFn(ajv);
 
 async function loadJson(filePath: string): Promise<unknown> {
-  return JSON.parse(await readFile(filePath, "utf8")) as unknown;
+  return parseJsonText(await readFile(filePath, "utf8"), `schema file '${filePath}'`);
 }
 
 export async function runConformanceValidation(options: {

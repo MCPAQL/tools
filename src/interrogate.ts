@@ -329,6 +329,7 @@ export async function interrogateServer(config: InterrogationConfig): Promise<Di
           header: config.auth?.header ?? "Authorization",
           prefix: config.auth?.prefix ?? "Bearer ",
           token_env: config.auth?.token_env,
+          // Preserve the operator-provided command here for reproducibility; capture_config_redacted is the secrecy boundary.
           token_command: config.auth?.token_command,
         },
         capture_config_redacted: deepRedact(config) as unknown as Record<string, unknown>,

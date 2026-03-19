@@ -68,6 +68,7 @@ export async function withTimeout<T>(promise: Promise<T>, timeoutMs = DEFAULT_TI
   let timeoutId: NodeJS.Timeout | undefined;
 
   try {
+    // NOTE: Promise.race does not abort the underlying request; true cancellation requires AbortSignal plumbing.
     return await Promise.race([
       promise,
       new Promise<T>((_, reject) => {
