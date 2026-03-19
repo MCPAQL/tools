@@ -103,7 +103,7 @@ export interface DiscoveryBundle {
       token_env?: string;
       token_command?: string;
     };
-    capture_config_redacted: InterrogationConfig;
+    capture_config_redacted: Record<string, unknown>;
   };
   raw_capture: {
     tools: unknown[];
