@@ -1,0 +1,30 @@
+{
+  "name": "@mcpaql/tools",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Tooling for MCP-AQL discovery, validation, and adapter generation workflows",
+  "type": "module",
+  "bin": {
+    "mcpaql-interrogate": "./dist/cli.js",
+    "mcpaql-diff": "./dist/diff-cli.js",
+    "mcpaql-conformance": "./dist/conformance-cli.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "node --import tsx --test \"test/**/*.test.ts\"",
+    "interrogate": "tsx src/cli.ts",
+    "diff": "tsx src/diff-cli.ts",
+    "conformance": "tsx src/conformance-cli.ts"
+  },
+  "license": "SEE LICENSE IN LICENSE",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.17.4",
+    "ajv": "^8.17.1",
+    "ajv-formats": "^3.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^24.3.0",
+    "tsx": "^4.20.5",
+    "typescript": "^5.9.2"
+  }
+}
