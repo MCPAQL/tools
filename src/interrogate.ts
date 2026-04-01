@@ -53,14 +53,30 @@ export function classifyEndpoint(tool: RawTool): {
   reviewReasons: string[];
 } {
   const name = tool.name;
-  const description = `${tool.description ?? ""} ${String(tool.annotations?.title ?? "")}`.toLowerCase();
+  const rawDescription = `${tool.description ?? ""} ${String(tool.annotations?.title ?? "")}`.trim();
+  const description = rawDescription.toLowerCase();
   const reviewReasons: string[] = [];
 
   const strongPrefix = (prefixes: string[]): boolean => prefixes.some((prefix) => name.startsWith(prefix));
   const contains = (needles: string[]): boolean => needles.some((needle) => description.includes(needle));
+  const startsWithPhrase = (phrases: string[]): boolean =>
+    phrases.some((phrase) => description.startsWith(phrase));
 
   if (strongPrefix(["get_", "list_", "search_"]) || name.endsWith("_read")) {
     return { endpoint: "READ", confidence: "high", reviewReasons };
+  }
+
+  if (
+    startsWithPhrase(["returns ", "return ", "capture accessibility snapshot"]) ||
+    rawDescription.startsWith("List, ")
+  ) {
+    if (rawDescription.startsWith("List, ")) {
+      reviewReasons.push("Description mixes list behavior with mutating tab actions.");
+      return { endpoint: "EXECUTE", confidence: "low", reviewReasons };
+    }
+
+    reviewReasons.push("Description indicates the tool returns observed state without mutating the source.");
+    return { endpoint: "READ", confidence: "medium", reviewReasons };
   }
 
   if (strongPrefix(["delete_", "remove_"])) {
@@ -324,14 +340,19 @@ export async function interrogateServer(config: InterrogationConfig): Promise<Di
           version: client.getServerVersion()?.version,
           title: client.getServerVersion()?.title,
         },
-        auth: {
-          type: config.auth?.type ?? "none",
-          header: config.auth?.header ?? "Authorization",
-          prefix: config.auth?.prefix ?? "Bearer ",
-          token_env: config.auth?.token_env,
-          // Preserve the operator-provided command here for reproducibility; capture_config_redacted is the secrecy boundary.
-          token_command: config.auth?.token_command,
-        },
+        auth:
+          config.auth?.type === "bearer"
+            ? {
+                type: "bearer",
+                header: config.auth.header ?? "Authorization",
+                prefix: config.auth.prefix ?? "Bearer ",
+                token_env: config.auth.token_env,
+                // Preserve the operator-provided command here for reproducibility; capture_config_redacted is the secrecy boundary.
+                token_command: config.auth.token_command,
+              }
+            : {
+                type: "none",
+              },
         capture_config_redacted: deepRedact(config) as unknown as Record<string, unknown>,
       },
       raw_capture: {
