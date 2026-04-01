@@ -36,8 +36,8 @@ test("deepRedact removes token-shaped secrets recursively", () => {
     token_command: "gh auth token",
     server_url: "https://example.com/mcp",
     auth: {
-      Authorization: "Bearer ghp_super_secret",
-      nested: ["ghu_example_secret"],
+      Authorization: "Bearer ghu_example_test_token",
+      nested: ["ghu_example_test_token"],
     },
   };
 
