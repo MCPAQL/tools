@@ -257,8 +257,8 @@ test("sdefToOperations: generates element listing operations", () => {
 </dictionary>`);
 
   const { operations } = sdefToOperations(sdef);
-  const listOp = operations.find((op) => op.operation_name === "list_account_mailboxs");
-  assert.ok(listOp, "Expected list_account_mailboxs operation");
+  const listOp = operations.find((op) => op.operation_name === "list_account_mailboxes");
+  assert.ok(listOp, "Expected list_account_mailboxes operation");
   assert.equal(listOp?.endpoint, "READ");
 });
 

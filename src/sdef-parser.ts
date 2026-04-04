@@ -121,7 +121,7 @@ function parseXml(xml: string): XmlNode {
   // Strip XML declaration and DOCTYPE
   const cleaned = xml
     .replace(/<\?xml[^?]*\?>/g, "")
-    .replace(/<!DOCTYPE[^>]*>/g, "")
+    .replace(/<!DOCTYPE[^[>]*(?:\[[^\]]*\])?\s*>/g, "")
     .replace(/<!--[\s\S]*?-->/g, "")
     .trim();
 
@@ -266,7 +266,7 @@ function parseClass(node: XmlNode): SdefClass {
     name: attr(node, "name"),
     code: attr(node, "code"),
     description: attr(node, "description"),
-    plural: attr(node, "plural", attr(node, "name") + "s"),
+    plural: attr(node, "plural") || simplePlural(attr(node, "name")),
     properties: findChildren(node, "property").map(parseProperty),
     elements: findChildren(node, "element").map(parseClassElement),
   };
@@ -324,7 +324,10 @@ function parseSuite(node: XmlNode): SdefSuite {
     name: attr(node, "name"),
     code: attr(node, "code"),
     description: attr(node, "description"),
-    classes: findChildren(node, "class").concat(findChildren(node, "class-extension")).map(parseClass),
+    classes: findChildren(node, "class")
+      .concat(findChildren(node, "class-extension"))
+      .map(parseClass)
+      .filter((cls) => cls.name),
     commands: findChildren(node, "command").map(parseCommand),
     enumerations: findChildren(node, "enumeration").map(parseEnumeration),
   };
@@ -521,6 +524,19 @@ function classifyPropertyAccess(
   return { readOp, writeOp };
 }
 
+/**
+ * Naive English pluralization covering common suffixes.
+ */
+function simplePlural(word: string): string {
+  if (word.endsWith("s") || word.endsWith("x") || word.endsWith("ch") || word.endsWith("sh")) {
+    return word + "es";
+  }
+  if (word.endsWith("y") && !/[aeiou]y$/.test(word)) {
+    return word.slice(0, -1) + "ies";
+  }
+  return word + "s";
+}
+
 function mapSdefTypeToJsonType(sdefType: string): string {
   const typeMap: Record<string, string> = {
     text: "string",
@@ -551,7 +567,7 @@ function classifyDanger(endpoint: EndpointCategory): DangerLevel {
     case "DELETE":
       return "destructive";
     case "EXECUTE":
-      return "dangerous";
+      return "reversible";
   }
 }
 
@@ -701,7 +717,7 @@ export function sdefToOperations(
 
           operations.push({
             source_tool_name: `${cls.name}.${element.type}`,
-            operation_name: `list_${classSnake}_${elementSnake}s`,
+            operation_name: `list_${classSnake}_${simplePlural(elementSnake)}`,
             description: `List ${element.type} elements of ${cls.name}.`,
             endpoint: "READ",
             endpoint_confidence: "high",

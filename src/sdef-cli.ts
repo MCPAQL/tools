@@ -17,35 +17,21 @@ import { parseSdefFile, sdefToOperations } from "./sdef-parser.js";
 import { parseArgs, writeJsonFile } from "./shared.js";
 import type { DiscoveryBundle } from "./types.js";
 
-/**
- * Resolve the .sdef file path from an application name.
- */
-function resolveSdefPath(appName: string): string {
-  // Common locations for .sdef files
-  const candidates = [
-    `/Applications/${appName}.app/Contents/Resources/${appName}.sdef`,
-    `/System/Applications/${appName}.app/Contents/Resources/${appName}.sdef`,
-    `/Applications/${appName}.app/Contents/Resources/Scripting Definitions/${appName}.sdef`,
-  ];
-
-  // For multi-word app names, also try without spaces
-  const normalized = appName.replace(/\s+/g, "");
-  if (normalized !== appName) {
-    candidates.push(
-      `/Applications/${normalized}.app/Contents/Resources/${normalized}.sdef`,
-      `/System/Applications/${normalized}.app/Contents/Resources/${normalized}.sdef`,
-    );
-  }
-
-  return candidates[0]; // Return primary candidate; actual existence checked later
-}
-
 async function findSdefPath(appName: string): Promise<string> {
   const candidates = [
     `/Applications/${appName}.app/Contents/Resources/${appName}.sdef`,
     `/System/Applications/${appName}.app/Contents/Resources/${appName}.sdef`,
     `/Applications/${appName}.app/Contents/Resources/Scripting Definitions/${appName}.sdef`,
   ];
+
+  // For multi-word app names, also try without spaces (e.g., "Final Cut Pro" → "FinalCutPro")
+  const noSpaces = appName.replace(/\s+/g, "");
+  if (noSpaces !== appName) {
+    candidates.push(
+      `/Applications/${noSpaces}.app/Contents/Resources/${noSpaces}.sdef`,
+      `/System/Applications/${noSpaces}.app/Contents/Resources/${noSpaces}.sdef`,
+    );
+  }
 
   for (const candidate of candidates) {
     try {
@@ -87,7 +73,7 @@ async function main(): Promise<void> {
     source: {
       name: sdef.application || appName || path.basename(resolvedPath, ".sdef"),
       server_url: `native-applescript://${sdef.application || appName}`,
-      transport: "streamable_http" as any, // Override for native transport in bundle metadata
+      transport: "native-applescript",
       captured_at: new Date().toISOString(),
       server: {
         name: sdef.application || appName,

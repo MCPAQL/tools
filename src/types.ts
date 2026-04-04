@@ -89,7 +89,7 @@ export interface DiscoveryBundle {
   source: {
     name: string;
     server_url: string;
-    transport: "streamable_http";
+    transport: "streamable_http" | "native-applescript";
     captured_at: string;
     server: {
       name?: string;
