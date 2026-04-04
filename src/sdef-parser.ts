@@ -324,6 +324,8 @@ function parseSuite(node: XmlNode): SdefSuite {
     name: attr(node, "name"),
     code: attr(node, "code"),
     description: attr(node, "description"),
+    // class-extension nodes (which add properties to an existing class via `extends`)
+    // are intentionally excluded here; merging into parent classes is not yet supported.
     classes: findChildren(node, "class")
       .concat(findChildren(node, "class-extension"))
       .map(parseClass)
@@ -550,7 +552,7 @@ function mapSdefTypeToJsonType(sdefType: string): string {
     specifier: "string",
     any: "string",
     file: "string",
-    "alias": "string",
+    alias: "string",
     number: "number",
   };
 

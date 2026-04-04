@@ -66,7 +66,7 @@ export interface NormalizedOperation {
   maps_to: string;
   returns: {
     type: "object";
-    name: "WrappedToolResult";
+    name: string;
     description: string;
   };
   provenance: {
