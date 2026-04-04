@@ -7,14 +7,16 @@
   "bin": {
     "mcpaql-interrogate": "./dist/cli.js",
     "mcpaql-diff": "./dist/diff-cli.js",
-    "mcpaql-conformance": "./dist/conformance-cli.js"
+    "mcpaql-conformance": "./dist/conformance-cli.js",
+    "mcpaql-sdef-interrogate": "./dist/sdef-cli.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "test": "node --import tsx --test \"test/**/*.test.ts\"",
     "interrogate": "tsx src/cli.ts",
     "diff": "tsx src/diff-cli.ts",
-    "conformance": "tsx src/conformance-cli.ts"
+    "conformance": "tsx src/conformance-cli.ts",
+    "sdef-interrogate": "tsx src/sdef-cli.ts"
   },
   "license": "SEE LICENSE IN LICENSE",
   "dependencies": {

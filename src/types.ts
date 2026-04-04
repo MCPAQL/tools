@@ -66,7 +66,7 @@ export interface NormalizedOperation {
   maps_to: string;
   returns: {
     type: "object";
-    name: "WrappedToolResult";
+    name: string;
     description: string;
   };
   provenance: {
@@ -89,7 +89,7 @@ export interface DiscoveryBundle {
   source: {
     name: string;
     server_url: string;
-    transport: "streamable_http";
+    transport: "streamable_http" | "native-applescript";
     captured_at: string;
     server: {
       name?: string;
