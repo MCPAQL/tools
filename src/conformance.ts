@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 
 import type { ConformanceReport } from "./types.js";
 import { connectStdioAdapter } from "./adapter-client.js";
+import { firstTextContent, parseJsonText, READ_ENDPOINT_TOOL_NAME, withTimeout } from "./shared.js";
 
 const require = createRequire(import.meta.url);
 const AjvCtor = require("ajv/dist/2020").default as new (options?: Record<string, unknown>) => {
@@ -22,18 +23,8 @@ const addFormatsFn = require("ajv-formats").default as (ajv: {
 const ajv = new AjvCtor({ allErrors: true, strict: false });
 addFormatsFn(ajv);
 
-function firstTextContent(result: unknown): string {
-  const content = (result as { content?: unknown }).content;
-  if (!Array.isArray(content) || content.length === 0) {
-    return "{}";
-  }
-
-  const first = content[0] as { text?: unknown };
-  return typeof first.text === "string" ? first.text : "{}";
-}
-
 async function loadJson(filePath: string): Promise<unknown> {
-  return JSON.parse(await readFile(filePath, "utf8")) as unknown;
+  return parseJsonText(await readFile(filePath, "utf8"), `schema file '${filePath}'`);
 }
 
 export async function runConformanceValidation(options: {
@@ -54,50 +45,78 @@ export async function runConformanceValidation(options: {
   const validateIntrospection = ajv.compile(introspectionSchema);
 
   const { client, transport } = await connectStdioAdapter(options.server);
-  const tools = await client.listTools();
   const checks: ConformanceReport["checks"] = [];
 
-  const toolNames = new Set(tools.tools.map((tool) => tool.name));
-  checks.push({
-    name: "tool-registration",
-    passed: toolNames.has("mcp_aql_read"),
-    detail: `Registered tools: ${[...toolNames].join(", ")}`,
-  });
+  try {
+    const tools = await withTimeout(client.listTools(), undefined, "conformance tools/list");
+    const toolNames = new Set(tools.tools.map((tool) => tool.name));
+    checks.push({
+      name: "tool-registration",
+      passed: toolNames.has(READ_ENDPOINT_TOOL_NAME),
+      detail: `Registered tools: ${[...toolNames].join(", ")}`,
+    });
 
-  const introspectRequest = {
-    operation: "introspect",
-    params: { query: "operations" },
-  };
-  checks.push({
-    name: "operation-input-schema",
-    passed: Boolean(validateInput(introspectRequest)),
-    detail: validateInput.errors ? ajv.errorsText(validateInput.errors) : "Request matches schema.",
-  });
+    const introspectRequest = {
+      operation: "introspect",
+      params: { query: "operations" },
+    };
+    checks.push({
+      name: "operation-input-schema",
+      passed: Boolean(validateInput(introspectRequest)),
+      detail: validateInput.errors ? ajv.errorsText(validateInput.errors) : "Request matches schema.",
+    });
 
-  const toolCall = await client.callTool({
-    name: "mcp_aql_read",
-    arguments: introspectRequest,
-  });
-  const payload = JSON.parse(firstTextContent(toolCall)) as unknown;
+    // TODO: add live CRUD proxy operation exercises in addition to introspection-only validation.
+    const toolCall = await withTimeout(
+      client.callTool({
+        name: READ_ENDPOINT_TOOL_NAME,
+        arguments: introspectRequest,
+      }),
+      undefined,
+      "conformance introspect call",
+    );
 
-  checks.push({
-    name: "operation-result-schema",
-    passed: Boolean(validateResult(payload)),
-    detail: validateResult.errors ? ajv.errorsText(validateResult.errors) : "Response envelope matches schema.",
-  });
+    let payload: unknown;
+    try {
+      payload = parseJsonText(firstTextContent(toolCall), "conformance introspection response");
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      checks.push({
+        name: "operation-result-schema",
+        passed: false,
+        detail,
+      });
+      checks.push({
+        name: "introspection-response-schema",
+        passed: false,
+        detail: "Skipped because the introspection response was not valid JSON.",
+      });
 
-  checks.push({
-    name: "introspection-response-schema",
-    passed: Boolean(validateIntrospection(payload)),
-    detail: validateIntrospection.errors
-      ? ajv.errorsText(validateIntrospection.errors)
-      : "Introspection response matches schema.",
-  });
+      return {
+        passed: false,
+        checks,
+      };
+    }
 
-  await transport.close();
+    checks.push({
+      name: "operation-result-schema",
+      passed: Boolean(validateResult(payload)),
+      detail: validateResult.errors ? ajv.errorsText(validateResult.errors) : "Response envelope matches schema.",
+    });
 
-  return {
-    passed: checks.every((check) => check.passed),
-    checks,
-  };
+    checks.push({
+      name: "introspection-response-schema",
+      passed: Boolean(validateIntrospection(payload)),
+      detail: validateIntrospection.errors
+        ? ajv.errorsText(validateIntrospection.errors)
+        : "Introspection response matches schema.",
+    });
+
+    return {
+      passed: checks.every((check) => check.passed),
+      checks,
+    };
+  } finally {
+    await transport.close();
+  }
 }

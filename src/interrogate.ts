@@ -10,10 +10,11 @@ import type {
   DiscoveryParam,
   DiscoveryWarning,
   EndpointCategory,
+  InferenceSource,
   InterrogationConfig,
   NormalizedOperation,
 } from "./types.js";
-import { deepRedact, normalizeSnakeCase, writeJsonFile } from "./shared.js";
+import { deepRedact, normalizeSnakeCase, parseJsonText, withTimeout, writeJsonFile } from "./shared.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -28,7 +29,25 @@ interface RawTool {
   };
 }
 
-function classifyEndpoint(tool: RawTool): {
+function validateConfig(config: InterrogationConfig): void {
+  if (!config.name.trim()) {
+    throw new Error("Interrogation config requires a non-empty 'name'.");
+  }
+
+  if (!config.server_url.trim()) {
+    throw new Error("Interrogation config requires a non-empty 'server_url'.");
+  }
+
+  if (config.transport.type !== "streamable_http") {
+    throw new Error(`Unsupported transport type '${config.transport.type}'.`);
+  }
+
+  if (config.auth?.type === "bearer" && !config.auth.token_env && !config.auth.token_command) {
+    throw new Error("Bearer auth requires either 'token_env' or 'token_command'.");
+  }
+}
+
+export function classifyEndpoint(tool: RawTool): {
   endpoint: EndpointCategory;
   confidence: "high" | "medium" | "low";
   reviewReasons: string[];
@@ -48,6 +67,11 @@ function classifyEndpoint(tool: RawTool): {
     return { endpoint: "DELETE", confidence: "high", reviewReasons };
   }
 
+  if (contains(["delete", "remove", "destroy"])) {
+    reviewReasons.push("Description implies destructive behavior.");
+    return { endpoint: "DELETE", confidence: "medium", reviewReasons };
+  }
+
   if (strongPrefix(["update_"]) || name.endsWith("_write")) {
     if (name.endsWith("_write")) {
       reviewReasons.push("Write suffix is semantically broad and may hide create/update behavior.");
@@ -56,7 +80,12 @@ function classifyEndpoint(tool: RawTool): {
     return { endpoint: "UPDATE", confidence: "high", reviewReasons };
   }
 
-  if (strongPrefix(["create_", "add_", "fork_", "assign_"])) {
+  if (strongPrefix(["assign_"])) {
+    reviewReasons.push("Assignment semantics treated as UPDATE on an existing resource.");
+    return { endpoint: "UPDATE", confidence: "medium", reviewReasons };
+  }
+
+  if (strongPrefix(["create_", "add_", "fork_"])) {
     if (name.startsWith("create_or_update_")) {
       reviewReasons.push("Tool name spans both create and update semantics.");
       return { endpoint: "UPDATE", confidence: "low", reviewReasons };
@@ -74,8 +103,8 @@ function classifyEndpoint(tool: RawTool): {
     return { endpoint: "EXECUTE", confidence: "medium", reviewReasons };
   }
 
-  reviewReasons.push("No strong semantic signal found in tool name or description.");
-  return { endpoint: "READ", confidence: "low", reviewReasons };
+  reviewReasons.push("No strong semantic signal found in tool name or description; defaulting conservatively to EXECUTE.");
+  return { endpoint: "EXECUTE", confidence: "low", reviewReasons };
 }
 
 function classifyDanger(endpoint: EndpointCategory): DangerLevel {
@@ -122,12 +151,16 @@ function normalizeParams(tool: RawTool): DiscoveryParam[] {
 function normalizeTool(tool: RawTool, warnings: DiscoveryWarning[]): NormalizedOperation {
   const { endpoint, confidence, reviewReasons } = classifyEndpoint(tool);
   const params = normalizeParams(tool);
+  const normalizedOperationName = normalizeSnakeCase(tool.name);
+  const operationNameSource: InferenceSource =
+    tool.name === normalizedOperationName ? "direct_source_metadata" : "deterministic_normalization";
+  const descriptionSource: InferenceSource = tool.description ? "direct_source_metadata" : "heuristic_classification";
 
-  if (tool.name !== normalizeSnakeCase(tool.name)) {
+  if (tool.name !== normalizedOperationName) {
     warnings.push({
       code: "NAME_NORMALIZED",
       severity: "info",
-      message: `Tool '${tool.name}' was normalized to snake_case operation name '${normalizeSnakeCase(tool.name)}'.`,
+      message: `Tool '${tool.name}' was normalized to snake_case operation name '${normalizedOperationName}'.`,
       tool: tool.name,
       heuristic: "snake_case_normalization",
     });
@@ -158,7 +191,7 @@ function normalizeTool(tool: RawTool, warnings: DiscoveryWarning[]): NormalizedO
 
   return {
     source_tool_name: tool.name,
-    operation_name: normalizeSnakeCase(tool.name),
+    operation_name: normalizedOperationName,
     title: typeof tool.annotations?.title === "string" ? tool.annotations.title : undefined,
     description: tool.description ?? `Proxy for upstream MCP tool '${tool.name}'.`,
     endpoint,
@@ -178,6 +211,13 @@ function normalizeTool(tool: RawTool, warnings: DiscoveryWarning[]): NormalizedO
       description: tool.description ? "description" : undefined,
       annotations: tool.annotations ? Object.keys(tool.annotations) : undefined,
       input_schema_present: Boolean(tool.inputSchema),
+      inference_sources: {
+        operation_name: operationNameSource,
+        description: descriptionSource,
+        endpoint: "heuristic_classification",
+        danger_level: "heuristic_classification",
+        maps_to: "deterministic_normalization",
+      },
     },
   };
 }
@@ -198,7 +238,8 @@ async function resolveAuthHeaders(config: InterrogationConfig): Promise<Record<s
   }
 
   if (!token && config.auth.token_command) {
-    const { stdout } = await execFileAsync("/bin/zsh", ["-lc", config.auth.token_command], {
+    // token_command is shell-interpreted and must come from trusted operator-controlled config.
+    const { stdout } = await execFileAsync("/bin/sh", ["-lc", config.auth.token_command], {
       env: process.env,
     });
     token = stdout.trim();
@@ -214,7 +255,46 @@ async function resolveAuthHeaders(config: InterrogationConfig): Promise<Record<s
 
 export async function loadConfig(configPath: string): Promise<InterrogationConfig> {
   const content = await readFile(configPath, "utf8");
-  return JSON.parse(content) as InterrogationConfig;
+  const config = parseJsonText<InterrogationConfig>(content, `config file '${configPath}'`);
+  validateConfig(config);
+  return config;
+}
+
+async function listAllTools(client: Client): Promise<{
+  tools: RawTool[];
+  page_count: number;
+  pages: Array<{ cursor: string | null; next_cursor: string | null; tool_count: number }>;
+}> {
+  const tools: RawTool[] = [];
+  const pages: Array<{ cursor: string | null; next_cursor: string | null; tool_count: number }> = [];
+  let cursor: string | undefined;
+
+  for (;;) {
+    const response = await withTimeout(
+      client.listTools(cursor ? { cursor } : undefined),
+      undefined,
+      "tools/list",
+    );
+    const pageTools = (response.tools ?? []) as unknown as RawTool[];
+    tools.push(...pageTools);
+    pages.push({
+      cursor: cursor ?? null,
+      next_cursor: response.nextCursor ?? null,
+      tool_count: pageTools.length,
+    });
+
+    if (!response.nextCursor) {
+      break;
+    }
+
+    cursor = response.nextCursor;
+  }
+
+  return {
+    tools,
+    page_count: pages.length,
+    pages,
+  };
 }
 
 export async function interrogateServer(config: InterrogationConfig): Promise<DiscoveryBundle> {
@@ -226,44 +306,47 @@ export async function interrogateServer(config: InterrogationConfig): Promise<Di
     },
   });
 
-  await client.connect(transport);
-  const toolsResponse = await client.listTools();
-  const rawTools = toolsResponse.tools as unknown as RawTool[];
-  const warnings: DiscoveryWarning[] = [];
-  const operations = rawTools.map((tool) => normalizeTool(tool, warnings));
+  try {
+    await client.connect(transport);
+    const toolsCapture = await listAllTools(client);
+    const warnings: DiscoveryWarning[] = [];
+    const operations = toolsCapture.tools.map((tool) => normalizeTool(tool, warnings));
 
-  const bundle: DiscoveryBundle = {
-    schema_version: "1.0",
-    source: {
-      name: config.name,
-      server_url: config.server_url,
-      transport: "streamable_http",
-      captured_at: new Date().toISOString(),
-      server: {
-        name: client.getServerVersion()?.name,
-        version: client.getServerVersion()?.version,
-        title: client.getServerVersion()?.title,
+    return {
+      schema_version: "1.0.0-draft",
+      source: {
+        name: config.name,
+        server_url: config.server_url,
+        transport: "streamable_http",
+        captured_at: new Date().toISOString(),
+        server: {
+          name: client.getServerVersion()?.name,
+          version: client.getServerVersion()?.version,
+          title: client.getServerVersion()?.title,
+        },
+        auth: {
+          type: config.auth?.type ?? "none",
+          header: config.auth?.header ?? "Authorization",
+          prefix: config.auth?.prefix ?? "Bearer ",
+          token_env: config.auth?.token_env,
+          // Preserve the operator-provided command here for reproducibility; capture_config_redacted is the secrecy boundary.
+          token_command: config.auth?.token_command,
+        },
+        capture_config_redacted: deepRedact(config) as unknown as Record<string, unknown>,
       },
-      auth: {
-        type: config.auth?.type ?? "none",
-        header: config.auth?.header ?? "Authorization",
-        prefix: config.auth?.prefix ?? "Bearer ",
-        token_env: config.auth?.token_env,
-        token_command: config.auth?.token_command,
+      raw_capture: {
+        tools: toolsCapture.tools,
+        list_tools_page_count: toolsCapture.page_count,
+        list_tools_pages: toolsCapture.pages,
       },
-      capture_config_redacted: deepRedact(config),
-    },
-    raw_capture: {
-      tools: rawTools,
-    },
-    normalized_bundle: {
-      operations,
-      warnings,
-    },
-  };
-
-  await transport.close();
-  return bundle;
+      normalized_bundle: {
+        operations,
+        warnings,
+      },
+    };
+  } finally {
+    await transport.close();
+  }
 }
 
 export async function persistBundle(bundle: DiscoveryBundle, outDir: string): Promise<void> {
