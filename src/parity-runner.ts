@@ -269,9 +269,14 @@ export async function runParitySuite<F>(
     for (const op of prov.operations) if (op.param_mappings) paramMappings[op.operation_name] = op.param_mappings;
   } catch { /* provenance optional */ }
 
-  // The adapter's bundled schema may carry headers captured at discovery time.
-  // Forward them to the official side so both sides see the same toolset surface.
-  const officialExtraHeaders = schema.headers ?? suite.upstreamHeaders;
+  // The adapter's bundled schema may carry headers captured at discovery time
+  // (e.g., X-MCP-Toolsets). Merge with any suite-supplied headers — schema
+  // headers take precedence (captured-at-discovery is authoritative), but
+  // suite-supplied headers are not silently dropped when both exist.
+  const officialExtraHeaders: Record<string, string> = {
+    ...(suite.upstreamHeaders ?? {}),
+    ...(schema.headers ?? {}),
+  };
 
   // Build the full op list from the adapter schema.
   const adapterOps: Array<{ name: string; endpoint: Endpoint }> = [];
@@ -281,7 +286,7 @@ export async function runParitySuite<F>(
   const opSpecs = new Map(suite.operations.map((o) => [o.name, o]));
 
   console.log(`[${suite.name}] adapter exposes ${adapterOps.length} ops; suite has builders for ${opSpecs.size}`);
-  if (officialExtraHeaders) console.log(`[${suite.name}] forwarding extra headers to official:`, Object.keys(officialExtraHeaders).join(", "));
+  if (Object.keys(officialExtraHeaders).length > 0) console.log(`[${suite.name}] forwarding extra headers to official:`, Object.keys(officialExtraHeaders).join(", "));
 
   // Fixtures: setup or reuse
   let fixtures: F;
@@ -294,12 +299,13 @@ export async function runParitySuite<F>(
     fixtures = await suite.setupFixtures();
   }
 
-  // Connect both clients
+  // Build transports + Client instances. Connect happens inside the try block
+  // below so that cleanup (close clients + teardown fixtures) runs even when a
+  // connect call throws after fixtures were already set up.
   const officialTransport = new StreamableHTTPClientTransport(new URL(suite.upstreamUrl), {
-    requestInit: { headers: { Authorization: `Bearer ${token}`, ...(officialExtraHeaders ?? {}) } },
+    requestInit: { headers: { Authorization: `Bearer ${token}`, ...officialExtraHeaders } },
   });
   const official = new Client({ name: "parity-official", version: "0.1.0" });
-  await official.connect(officialTransport);
 
   const mcpaqlTransport = new StdioClientTransport({
     command: "node",
@@ -309,13 +315,19 @@ export async function runParitySuite<F>(
     stderr: "pipe",
   });
   const mcpaql = new Client({ name: "parity-mcpaql", version: "0.1.0" });
-  await mcpaql.connect(mcpaqlTransport);
 
   const ops: OpResult[] = [];
   const totals: Record<string, number> = { TOTAL: 0 };
   const startedAt = new Date().toISOString();
+  let officialConnected = false;
+  let mcpaqlConnected = false;
 
   try {
+    await official.connect(officialTransport);
+    officialConnected = true;
+    await mcpaql.connect(mcpaqlTransport);
+    mcpaqlConnected = true;
+
     for (const adapterOp of adapterOps) {
       const t0 = Date.now();
       const spec = opSpecs.get(adapterOp.name);
@@ -336,7 +348,12 @@ export async function runParitySuite<F>(
       console.log(`  ${pad(adapterOp.name, 44)} ${pad(result.category, 18)} -> ${result.cls}${result.detail ? " :: " + result.detail.slice(0, 80) : ""}`);
     }
   } finally {
-    await Promise.allSettled([official.close(), mcpaql.close()]);
+    // Only close clients that actually connected — calling close() on an
+    // unconnected Client throws on some transports.
+    await Promise.allSettled([
+      officialConnected ? official.close() : Promise.resolve(),
+      mcpaqlConnected ? mcpaql.close() : Promise.resolve(),
+    ]);
     if (!options.skipTeardown && !options.reuseFixtures) {
       try { await suite.teardownFixtures(fixtures); } catch (e) { console.error(`[${suite.name}] teardown failed:`, (e as Error).message); }
     }
