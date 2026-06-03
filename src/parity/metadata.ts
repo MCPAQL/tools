@@ -47,8 +47,11 @@ export async function loadAdapterMetadata(paths: Pick<ResolvedAdapterPaths, "sch
       if (op.param_mappings) paramMappings[op.operation_name] = op.param_mappings;
       if (op.source_tool_name) upstreamToolNames[op.operation_name] = op.source_tool_name;
     }
-  } catch {
-    // Provenance is optional for older generated adapters.
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw new Error(`Failed to load adapter provenance "${paths.provenancePath}": ${(e as Error).message}`);
+    }
+    // Missing provenance is optional for older generated adapters.
   }
 
   return {

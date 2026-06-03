@@ -37,8 +37,10 @@ export async function callMcpaql(
     if (text) {
       try { envelope = JSON.parse(text); } catch { envelope = { success: false, error: { code: "PARSE", message: "non-JSON text" } }; }
     }
-    const success = (envelope as { success?: boolean } | null)?.success === true;
-    return { ok: success && !res.isError, envelope, error: undefined as string | undefined };
+    const parsed = envelope as { success?: boolean; data?: { is_error?: boolean } } | null;
+    const success = parsed?.success === true;
+    const upstreamError = parsed?.data?.is_error === true;
+    return { ok: success && !upstreamError && !res.isError, envelope, error: undefined as string | undefined };
   } catch (e) {
     return { ok: false, envelope: null as unknown, error: (e as Error).message };
   }

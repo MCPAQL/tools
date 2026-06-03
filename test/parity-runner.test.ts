@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 
+import { callMcpaql } from "../src/parity/calls.js";
+import { loadAdapterMetadata } from "../src/parity/metadata.js";
 import {
   applyParamMappings,
   canonicalize,
@@ -39,6 +43,34 @@ test("resolveAdapterPaths supports explicit overrides and non-dist server filena
     provenancePath: path.join("/tmp", "prov.json"),
     adapterCwd: path.join("/tmp", "work"),
   });
+});
+
+test("loadAdapterMetadata tolerates missing optional provenance", async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), "parity-metadata-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const schemaPath = path.join(root, "schema.json");
+  const provenancePath = path.join(root, "provenance.json");
+  await writeFile(schemaPath, JSON.stringify({ operations: { READ: [{ name: "list_things" }] } }));
+
+  const metadata = await loadAdapterMetadata({ schemaPath, provenancePath });
+
+  assert.deepEqual(metadata.paramMappings, {});
+  assert.deepEqual(metadata.upstreamToolNames, {});
+  assert.deepEqual(metadata.adapterOps, [{ name: "list_things", endpoint: "read" }]);
+});
+
+test("loadAdapterMetadata fails on malformed provenance", async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), "parity-metadata-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const schemaPath = path.join(root, "schema.json");
+  const provenancePath = path.join(root, "provenance.json");
+  await writeFile(schemaPath, JSON.stringify({ operations: { READ: [{ name: "list_things" }] } }));
+  await writeFile(provenancePath, "{not-json");
+
+  await assert.rejects(
+    () => loadAdapterMetadata({ schemaPath, provenancePath }),
+    /Failed to load adapter provenance/,
+  );
 });
 
 test("normalize masks volatile keys recursively", () => {
@@ -178,6 +210,27 @@ test("extractMcpaqlPayload unwraps success, failure, and upstream error envelope
     extractMcpaqlPayload({ success: true, data: { is_error: true, content: [{ type: "text", text: "boom" }] } }),
     { error: { code: "UPSTREAM", message: "boom" } },
   );
+});
+
+test("callMcpaql treats adapter-wrapped upstream errors as failed calls", async () => {
+  const client = {
+    async callTool() {
+      return {
+        isError: false,
+        content: [{
+          type: "text",
+          text: JSON.stringify({
+            success: true,
+            data: { is_error: true, content: [{ type: "text", text: "not found" }] },
+          }),
+        }],
+      };
+    },
+  };
+
+  const result = await callMcpaql(client as Parameters<typeof callMcpaql>[0], "read", "get_thing", {}, 0);
+
+  assert.equal(result.ok, false);
 });
 
 test("classify treats key-order-only differences as identical", () => {
