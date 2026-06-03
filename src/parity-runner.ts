@@ -533,11 +533,11 @@ async function runOperation<F>(
   const cat = spec.category;
   if (cat === "SKIP") return { name: spec.name, endpoint, category: cat, cls: "SKIPPED", ms: 0 };
 
-  const argsOff = spec.args(fixtures, "official");
-  const argsMcp = spec.args(fixtures, "mcpaql");
   const upstreamToolName = resolveUpstreamToolName(spec.name, upstreamToolNames);
 
   if (cat === "PURE_READ" || cat === "PUBLIC_READ" || cat === "TEST_REPO_READ" || cat === "ORG_READ") {
+    const argsOff = spec.args(fixtures, "official");
+    const argsMcp = spec.args(fixtures, "mcpaql");
     if (!argsOff || !argsMcp) return { name: spec.name, endpoint, category: cat, cls: "SKIPPED", detail: "missing fixture", ms: 0 };
     const [off, mcp] = await Promise.all([
       callOfficial(official, upstreamToolName, applyParamMappings(argsOff, mapping), timeoutMs),
@@ -550,6 +550,8 @@ async function runOperation<F>(
   }
 
   if (cat === "PAIRED_WRITE" || cat === "COPILOT") {
+    const argsOff = spec.args(fixtures, "official");
+    const argsMcp = spec.args(fixtures, "mcpaql");
     if (!argsOff || !argsMcp) return { name: spec.name, endpoint, category: cat, cls: "SKIPPED", detail: "missing fixture", ms: 0 };
     const off = await callOfficial(official, upstreamToolName, applyParamMappings(argsOff, mapping), timeoutMs);
     const mcp = await callMcpaql(mcpaql, endpoint, spec.name, argsMcp, timeoutMs);
@@ -561,6 +563,7 @@ async function runOperation<F>(
   }
 
   if (cat === "ONESHOT_WRITE") {
+    const argsMcp = spec.args(fixtures, "mcpaql");
     if (!argsMcp) return { name: spec.name, endpoint, category: cat, cls: "SKIPPED", detail: "missing fixture", ms: 0 };
     const mcp = await callMcpaql(mcpaql, endpoint, spec.name, argsMcp, timeoutMs);
     const mcpP = extractMcpaqlPayload(mcp.envelope);
