@@ -11,6 +11,7 @@
 // as SKIPPED: "no suite arg builder" — the harness cannot silently hide gaps.
 
 import { readFile } from "node:fs/promises";
+import { basename, dirname, join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
@@ -32,6 +33,7 @@ export type Category =
 export type ParityClass =
   | "IDENTICAL"
   | "STRUCTURAL_PARITY"
+  | "UNVERIFIED_WRITE"
   | "DIVERGENT"
   | "OFFICIAL_ERROR"
   | "MCPAQL_ERROR"
@@ -73,15 +75,23 @@ export interface Suite<F> {
   teardownFixtures(fixtures: F): Promise<void>;
 }
 
-export interface RunOptions {
+export interface RunOptions<F = Record<string, unknown>> {
   adapterServerJs: string;
+  /** Optional override for the adapter's bundled schema.json path. Defaults to the server file's directory. */
+  schemaPath?: string;
+  /** Optional override for provenance.json. Defaults to the server file's directory. */
+  provenancePath?: string;
+  /** Optional override for adapter process cwd. Defaults to adapter root when server is under dist/. */
+  adapterCwd?: string;
   reportPath: string;
   /** If set, label written into the report; useful when running the same suite twice. */
   label?: string;
+  /** Per-operation call timeout. Defaults to 30 seconds. Set <= 0 to disable. */
+  timeoutMs?: number;
   /** If set, skip teardown — useful for debugging. Caller is responsible for cleanup. */
   skipTeardown?: boolean;
   /** If set, reuse these fixtures instead of calling setupFixtures (object or path to JSON file). */
-  reuseFixtures?: unknown | string;
+  reuseFixtures?: F | string;
 }
 
 export interface OpResult {
@@ -118,6 +128,36 @@ interface AdapterProvenance {
   operations: Array<{ operation_name: string; param_mappings?: Record<string, string> }>;
 }
 
+export interface ResolvedAdapterPaths {
+  schemaPath: string;
+  provenancePath: string;
+  adapterCwd: string;
+}
+
+const ENDPOINTS: readonly Endpoint[] = ["read", "create", "update", "delete", "execute"];
+const DEFAULT_TIMEOUT_MS = 30_000;
+
+function isEndpoint(value: string): value is Endpoint {
+  return (ENDPOINTS as readonly string[]).includes(value);
+}
+
+function endpointFromSchemaKey(value: string): Endpoint {
+  const endpoint = value.toLowerCase();
+  if (!isEndpoint(endpoint)) {
+    throw new Error(`Adapter schema contains unsupported endpoint "${value}". Expected one of: ${ENDPOINTS.join(", ")}.`);
+  }
+  return endpoint;
+}
+
+export function resolveAdapterPaths(options: Pick<RunOptions<unknown>, "adapterServerJs" | "schemaPath" | "provenancePath" | "adapterCwd">): ResolvedAdapterPaths {
+  const serverDir = dirname(options.adapterServerJs);
+  return {
+    schemaPath: options.schemaPath ?? join(serverDir, "schema.json"),
+    provenancePath: options.provenancePath ?? join(serverDir, "provenance.json"),
+    adapterCwd: options.adapterCwd ?? (basename(serverDir) === "dist" ? dirname(serverDir) : serverDir),
+  };
+}
+
 const VOLATILE_KEY_PATTERNS = [
   /(^|_)id$/i, /^node_id$/i, /(^|_)url$/i, /^etag$/i, /^sha$/i,
   /^htmlUrl$/i, /^html_url$/i,
@@ -138,6 +178,18 @@ export function normalize(value: unknown): unknown {
       out[k] = isVolatileKey(k) ? "<VOL>" : normalize(v);
     }
     return out;
+  }
+  return value;
+}
+
+export function canonicalize(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalize);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([k, v]) => [k, canonicalize(v)]),
+    );
   }
   return value;
 }
@@ -188,24 +240,24 @@ export function extractMcpaqlPayload(envelope: unknown): unknown {
   return e.data;
 }
 
-function classify(
+export function classify(
   officialOk: boolean, mcpaqlOk: boolean,
   officialPayload: unknown, mcpaqlPayload: unknown,
 ): { cls: ParityClass; detail?: string } {
-  const safe = (x: unknown) => (JSON.stringify(x) ?? "<undefined>").slice(0, 200);
+  const safe = (x: unknown) => (JSON.stringify(canonicalize(x)) ?? "<undefined>").slice(0, 200);
   if (!officialOk && !mcpaqlOk) return { cls: "BOTH_ERROR", detail: `official: ${safe(officialPayload)} | mcpaql: ${safe(mcpaqlPayload)}` };
   if (!officialOk && mcpaqlOk) return { cls: "OFFICIAL_ERROR", detail: safe(officialPayload) };
   if (officialOk && !mcpaqlOk) return { cls: "MCPAQL_ERROR", detail: safe(mcpaqlPayload) };
-  const offRaw = JSON.stringify(officialPayload) ?? "<undefined>";
-  const mcpRaw = JSON.stringify(mcpaqlPayload) ?? "<undefined>";
+  const offRaw = JSON.stringify(canonicalize(officialPayload)) ?? "<undefined>";
+  const mcpRaw = JSON.stringify(canonicalize(mcpaqlPayload)) ?? "<undefined>";
   if (offRaw === mcpRaw) return { cls: "IDENTICAL" };
-  const offNorm = JSON.stringify(normalize(officialPayload));
-  const mcpNorm = JSON.stringify(normalize(mcpaqlPayload));
+  const offNorm = JSON.stringify(canonicalize(normalize(officialPayload)));
+  const mcpNorm = JSON.stringify(canonicalize(normalize(mcpaqlPayload)));
   if (offNorm === mcpNorm) return { cls: "STRUCTURAL_PARITY" };
   return { cls: "DIVERGENT", detail: firstDiff(normalize(officialPayload), normalize(mcpaqlPayload), "") };
 }
 
-function firstDiff(a: unknown, b: unknown, path: string): string {
+export function firstDiff(a: unknown, b: unknown, path = ""): string {
   if (Array.isArray(a) && Array.isArray(b)) {
     if (a.length !== b.length) return `${path || "root"}: length ${a.length} vs ${b.length}`;
     for (let i = 0; i < a.length; i++) { const d = firstDiff(a[i], b[i], `${path}[${i}]`); if (d) return d; }
@@ -217,16 +269,35 @@ function firstDiff(a: unknown, b: unknown, path: string): string {
       const onlyA = ak.filter((k) => !bk.includes(k)), onlyB = bk.filter((k) => !ak.includes(k));
       return `${path || "root"}: keys differ (only-official: ${onlyA.join(",")} | only-mcpaql: ${onlyB.join(",")})`;
     }
-    for (const k of ak) { const d = firstDiff((a as Record<string, unknown>)[k], (b as Record<string, unknown>)[k], `${path}.${k}`); if (d) return d; }
+    for (const k of ak) {
+      const childPath = path ? `${path}.${k}` : k;
+      const d = firstDiff((a as Record<string, unknown>)[k], (b as Record<string, unknown>)[k], childPath);
+      if (d) return d;
+    }
     return "";
   }
-  if (a !== b) return `${path}: ${(JSON.stringify(a) ?? "").slice(0, 60)} vs ${(JSON.stringify(b) ?? "").slice(0, 60)}`;
+  if (a !== b) return `${path || "root"}: ${(JSON.stringify(a) ?? "").slice(0, 60)} vs ${(JSON.stringify(b) ?? "").slice(0, 60)}`;
   return "";
 }
 
-async function callOfficial(client: Client, opName: string, params: Record<string, unknown>) {
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+  if (timeoutMs <= 0) return promise;
+  let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    const res = await client.callTool({ name: opName, arguments: params });
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label} timed out after ${timeoutMs}ms`)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+async function callOfficial(client: Client, opName: string, params: Record<string, unknown>, timeoutMs: number) {
+  try {
+    const res = await withTimeout(client.callTool({ name: opName, arguments: params }), timeoutMs, `official ${opName}`);
     return { ok: !res.isError, raw: res, error: undefined as string | undefined };
   } catch (e) {
     return { ok: false, raw: null as unknown, error: (e as Error).message };
@@ -234,11 +305,11 @@ async function callOfficial(client: Client, opName: string, params: Record<strin
 }
 
 async function callMcpaql(
-  client: Client, endpoint: Endpoint, opName: string, params: Record<string, unknown>,
+  client: Client, endpoint: Endpoint, opName: string, params: Record<string, unknown>, timeoutMs: number,
 ) {
   const toolName = `mcp_aql_${endpoint}`;
   try {
-    const res = await client.callTool({ name: toolName, arguments: { operation: opName, params } });
+    const res = await withTimeout(client.callTool({ name: toolName, arguments: { operation: opName, params } }), timeoutMs, `mcpaql ${opName}`);
     let envelope: unknown = null;
     const content = (res.content as Array<{ type: string; text?: string }> | undefined) ?? [];
     const text = content.find((c) => c.type === "text")?.text;
@@ -254,18 +325,18 @@ async function callMcpaql(
 
 export async function runParitySuite<F>(
   suite: Suite<F>,
-  options: RunOptions,
+  options: RunOptions<F>,
 ): Promise<RunReport> {
   const token = process.env[suite.tokenEnv];
   if (!token) throw new Error(`Token env var "${suite.tokenEnv}" not set.`);
+  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const adapterPaths = resolveAdapterPaths(options);
 
   // Load adapter schema (operations list) and provenance (param mappings).
-  const schemaPath = options.adapterServerJs.replace(/server\.js$/, "schema.json");
-  const provPath = options.adapterServerJs.replace(/server\.js$/, "provenance.json");
-  const schema = JSON.parse(await readFile(schemaPath, "utf8")) as AdapterSchema;
+  const schema = JSON.parse(await readFile(adapterPaths.schemaPath, "utf8")) as AdapterSchema;
   const paramMappings: Record<string, Record<string, string>> = {};
   try {
-    const prov = JSON.parse(await readFile(provPath, "utf8")) as AdapterProvenance;
+    const prov = JSON.parse(await readFile(adapterPaths.provenancePath, "utf8")) as AdapterProvenance;
     for (const op of prov.operations) if (op.param_mappings) paramMappings[op.operation_name] = op.param_mappings;
   } catch { /* provenance optional */ }
 
@@ -277,11 +348,13 @@ export async function runParitySuite<F>(
     ...(suite.upstreamHeaders ?? {}),
     ...(schema.headers ?? {}),
   };
+  warnOnHeaderOverrides(suite.name, suite.tokenEnv, suite.upstreamHeaders ?? {}, schema.headers ?? {}, officialExtraHeaders);
 
   // Build the full op list from the adapter schema.
   const adapterOps: Array<{ name: string; endpoint: Endpoint }> = [];
   for (const [endpoint, ops] of Object.entries(schema.operations)) {
-    for (const op of ops) adapterOps.push({ name: op.name, endpoint: endpoint.toLowerCase() as Endpoint });
+    const parsedEndpoint = endpointFromSchemaKey(endpoint);
+    for (const op of ops) adapterOps.push({ name: op.name, endpoint: parsedEndpoint });
   }
   const opSpecs = new Map(suite.operations.map((o) => [o.name, o]));
 
@@ -310,9 +383,9 @@ export async function runParitySuite<F>(
   const mcpaqlTransport = new StdioClientTransport({
     command: "node",
     args: [options.adapterServerJs],
-    cwd: options.adapterServerJs.replace(/\/dist\/server\.js$/, ""),
+    cwd: adapterPaths.adapterCwd,
     env: { ...process.env, [suite.tokenEnv]: token } as Record<string, string>,
-    stderr: "pipe",
+    stderr: "inherit",
   });
   const mcpaql = new Client({ name: "parity-mcpaql", version: "0.1.0" });
 
@@ -336,7 +409,7 @@ export async function runParitySuite<F>(
         result = { name: adapterOp.name, endpoint: adapterOp.endpoint, category: "SKIP", cls: "SKIPPED", detail: "no suite arg builder", ms: 0 };
       } else {
         try {
-          result = await runOperation(spec, adapterOp.endpoint, fixtures, official, mcpaql, paramMappings[spec.name], paramMappings);
+          result = await runOperation(spec, adapterOp.endpoint, fixtures, official, mcpaql, paramMappings[spec.name], paramMappings, timeoutMs);
         } catch (e) {
           result = { name: spec.name, endpoint: adapterOp.endpoint, category: spec.category, cls: "MCPAQL_ERROR", detail: `harness exception: ${(e as Error).message}`, ms: 0 };
         }
@@ -376,6 +449,26 @@ export async function runParitySuite<F>(
   return report;
 }
 
+function warnOnHeaderOverrides(
+  suiteName: string,
+  tokenEnv: string,
+  suiteHeaders: Record<string, string>,
+  schemaHeaders: Record<string, string>,
+  mergedHeaders: Record<string, string>,
+): void {
+  const suiteHeaderKeys = new Map(Object.keys(suiteHeaders).map((key) => [key.toLowerCase(), key]));
+  for (const schemaKey of Object.keys(schemaHeaders)) {
+    const suiteKey = suiteHeaderKeys.get(schemaKey.toLowerCase());
+    if (suiteKey) {
+      console.warn(`[${suiteName}] schema header overrides suite header: ${suiteKey}`);
+    }
+  }
+  const authOverride = Object.keys(mergedHeaders).find((key) => key.toLowerCase() === "authorization");
+  if (authOverride) {
+    console.warn(`[${suiteName}] extra header "${authOverride}" overrides the Authorization header derived from ${tokenEnv}`);
+  }
+}
+
 async function runOperation<F>(
   spec: OperationSpec<F>,
   endpoint: Endpoint,
@@ -384,6 +477,7 @@ async function runOperation<F>(
   mcpaql: Client,
   mapping: Record<string, string> | undefined,
   allMappings: Record<string, Record<string, string>>,
+  timeoutMs: number,
 ): Promise<OpResult> {
   const cat = spec.category;
   if (cat === "SKIP") return { name: spec.name, endpoint, category: cat, cls: "SKIPPED", ms: 0 };
@@ -394,8 +488,8 @@ async function runOperation<F>(
   if (cat === "PURE_READ" || cat === "PUBLIC_READ" || cat === "TEST_REPO_READ" || cat === "ORG_READ") {
     if (!argsOff || !argsMcp) return { name: spec.name, endpoint, category: cat, cls: "SKIPPED", detail: "missing fixture", ms: 0 };
     const [off, mcp] = await Promise.all([
-      callOfficial(official, spec.name, applyParamMappings(argsOff, mapping)),
-      callMcpaql(mcpaql, endpoint, spec.name, argsMcp),
+      callOfficial(official, spec.name, applyParamMappings(argsOff, mapping), timeoutMs),
+      callMcpaql(mcpaql, endpoint, spec.name, argsMcp, timeoutMs),
     ]);
     const offP = extractOfficialPayload(off.raw);
     const mcpP = extractMcpaqlPayload(mcp.envelope);
@@ -405,8 +499,8 @@ async function runOperation<F>(
 
   if (cat === "PAIRED_WRITE" || cat === "COPILOT") {
     if (!argsOff || !argsMcp) return { name: spec.name, endpoint, category: cat, cls: "SKIPPED", detail: "missing fixture", ms: 0 };
-    const off = await callOfficial(official, spec.name, applyParamMappings(argsOff, mapping));
-    const mcp = await callMcpaql(mcpaql, endpoint, spec.name, argsMcp);
+    const off = await callOfficial(official, spec.name, applyParamMappings(argsOff, mapping), timeoutMs);
+    const mcp = await callMcpaql(mcpaql, endpoint, spec.name, argsMcp, timeoutMs);
     const offP = extractOfficialPayload(off.raw);
     const mcpP = extractMcpaqlPayload(mcp.envelope);
     const offM = maskVariantTokens(offP), mcpM = maskVariantTokens(mcpP);
@@ -416,17 +510,17 @@ async function runOperation<F>(
 
   if (cat === "ONESHOT_WRITE") {
     if (!argsMcp) return { name: spec.name, endpoint, category: cat, cls: "SKIPPED", detail: "missing fixture", ms: 0 };
-    const mcp = await callMcpaql(mcpaql, endpoint, spec.name, argsMcp);
+    const mcp = await callMcpaql(mcpaql, endpoint, spec.name, argsMcp, timeoutMs);
     const mcpP = extractMcpaqlPayload(mcp.envelope);
     if (!mcp.ok) return { name: spec.name, endpoint, category: cat, cls: "MCPAQL_ERROR", detail: (JSON.stringify(mcpP) ?? "<undefined>").slice(0, 200), ms: 0, mcpaqlOk: false };
     if (spec.verify) {
       const vArgs = spec.verify.args(fixtures, "official");
       if (vArgs) {
-        const v = await callOfficial(official, spec.verify.name, applyParamMappings(vArgs, allMappings[spec.verify.name]));
+        const v = await callOfficial(official, spec.verify.name, applyParamMappings(vArgs, allMappings[spec.verify.name]), timeoutMs);
         return { name: spec.name, endpoint, category: cat, cls: v.ok ? "STRUCTURAL_PARITY" : "MCPAQL_ERROR", detail: v.ok ? `verified via ${spec.verify.name}` : "verify call failed", ms: 0, mcpaqlOk: true };
       }
     }
-    return { name: spec.name, endpoint, category: cat, cls: "STRUCTURAL_PARITY", detail: "no verify configured", ms: 0, mcpaqlOk: true };
+    return { name: spec.name, endpoint, category: cat, cls: "UNVERIFIED_WRITE", detail: "no verify configured", ms: 0, mcpaqlOk: true };
   }
 
   return { name: spec.name, endpoint, category: cat, cls: "SKIPPED", detail: "unhandled category", ms: 0 };
