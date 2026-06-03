@@ -8,7 +8,8 @@
     "mcpaql-interrogate": "./dist/cli.js",
     "mcpaql-diff": "./dist/diff-cli.js",
     "mcpaql-conformance": "./dist/conformance-cli.js",
-    "mcpaql-sdef-interrogate": "./dist/sdef-cli.js"
+    "mcpaql-sdef-interrogate": "./dist/sdef-cli.js",
+    "mcpaql-parity": "./dist/parity-cli.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
@@ -16,7 +17,8 @@
     "interrogate": "tsx src/cli.ts",
     "diff": "tsx src/diff-cli.ts",
     "conformance": "tsx src/conformance-cli.ts",
-    "sdef-interrogate": "tsx src/sdef-cli.ts"
+    "sdef-interrogate": "tsx src/sdef-cli.ts",
+    "parity": "tsx src/parity-cli.ts"
   },
   "license": "SEE LICENSE IN LICENSE",
   "dependencies": {
