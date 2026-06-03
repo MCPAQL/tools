@@ -6,6 +6,8 @@ import { DEFAULT_TIMEOUT_MS, loadAdapterMetadata, resolveAdapterPaths } from "./
 import { runOperation } from "./operation.js";
 import type { OpResult, RunOptions, RunReport, Suite } from "./types.js";
 
+type UntimedOpResult = Omit<OpResult, "ms">;
+
 export async function runParitySuite<F>(
   suite: Suite<F>,
   options: RunOptions<F>,
@@ -66,22 +68,22 @@ export async function runParitySuite<F>(
     for (const adapterOp of adapterOps) {
       const t0 = Date.now();
       const spec = opSpecs.get(adapterOp.name);
-      let result: OpResult;
+      let result: UntimedOpResult;
       if (!spec) {
-        result = { name: adapterOp.name, endpoint: adapterOp.endpoint, category: "SKIP", cls: "SKIPPED", detail: "no suite arg builder", ms: 0 };
+        result = { name: adapterOp.name, endpoint: adapterOp.endpoint, category: "SKIP", cls: "SKIPPED", detail: "no suite arg builder" };
       } else {
         try {
           result = await runOperation(spec, adapterOp.endpoint, fixtures, official, mcpaql, upstreamToolNames, paramMappings[spec.name], paramMappings, timeoutMs);
         } catch (e) {
-          result = { name: spec.name, endpoint: adapterOp.endpoint, category: spec.category, cls: "HARNESS_ERROR", detail: `harness exception: ${(e as Error).message}`, ms: 0 };
+          result = { name: spec.name, endpoint: adapterOp.endpoint, category: spec.category, cls: "HARNESS_ERROR", detail: `harness exception: ${(e as Error).message}` };
         }
         if (spec.note) result.note = spec.note;
       }
-      result.ms = Date.now() - t0;
-      ops.push(result);
-      totals[result.cls] = (totals[result.cls] ?? 0) + 1;
+      const timedResult: OpResult = { ...result, ms: Date.now() - t0 };
+      ops.push(timedResult);
+      totals[timedResult.cls] = (totals[timedResult.cls] ?? 0) + 1;
       totals.TOTAL++;
-      console.log(`  ${pad(adapterOp.name, 44)} ${pad(result.category, 18)} -> ${result.cls}${result.detail ? " :: " + result.detail.slice(0, 80) : ""}`);
+      console.log(`  ${pad(adapterOp.name, 44)} ${pad(timedResult.category, 18)} -> ${timedResult.cls}${timedResult.detail ? " :: " + timedResult.detail.slice(0, 80) : ""}`);
     }
   } finally {
     await Promise.allSettled([

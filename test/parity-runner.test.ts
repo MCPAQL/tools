@@ -3,9 +3,11 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
+import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
 
 import { callMcpaql } from "../src/parity/calls.js";
 import { loadAdapterMetadata } from "../src/parity/metadata.js";
+import { runOperation } from "../src/parity/operation.js";
 import {
   applyParamMappings,
   canonicalize,
@@ -200,6 +202,49 @@ test("isExpectedVerifyResult supports custom predicates", () => {
     ),
     true,
   );
+});
+
+test("runOperation distinguishes null verify args from missing verify and leaves timing to the runner", async () => {
+  const official = {
+    async callTool() {
+      throw new Error("official verify should not be called");
+    },
+  } as unknown as Client;
+  const mcpaql = {
+    async callTool() {
+      return {
+        isError: false,
+        content: [{
+          type: "text",
+          text: JSON.stringify({ success: true, data: { ok: true } }),
+        }],
+      };
+    },
+  } as unknown as Client;
+
+  const result = await runOperation(
+    {
+      name: "delete_thing",
+      category: "ONESHOT_WRITE",
+      args: () => ({ id: "1" }),
+      verify: {
+        name: "get_thing",
+        args: () => null,
+      },
+    },
+    "delete",
+    {},
+    official,
+    mcpaql,
+    {},
+    undefined,
+    {},
+    0,
+  );
+
+  assert.equal(result.cls, "UNVERIFIED_WRITE");
+  assert.equal(result.detail, "verify args returned null");
+  assert.equal("ms" in result, false);
 });
 
 test("extractOfficialPayload prefers structured content and parses JSON text", () => {
