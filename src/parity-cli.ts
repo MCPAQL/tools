@@ -5,7 +5,14 @@
 //                 --report parity.json [--label X] [--timeout-ms 30000] [--no-teardown] \
 //                 [--reuse-fixtures ./fixtures.json]
 
-import { runParitySuite, type Suite } from "./parity-runner.js";
+import {
+  buildLlmMetricsReport,
+  loadLlmMetricsInput,
+  runParitySuite,
+  writeLlmMetricsMarkdownSummary,
+  writeLlmMetricsReport,
+  type Suite,
+} from "./parity-runner.js";
 import { pathToFileURL } from "node:url";
 import { resolve } from "node:path";
 
@@ -20,6 +27,11 @@ Options:
   --adapter-cwd <path>      Override adapter process working directory
   --timeout-ms <number>     Per-operation timeout. Default: 30000. Use 0 to disable
   --reuse-fixtures <json>   Reuse fixture JSON instead of running setupFixtures()
+  --llm-metrics-input <json>
+                            Normalize captured LLM task metrics from this JSON file
+  --llm-metrics-report <path>
+                            Write normalized LLM metrics JSON here
+  --llm-summary <path>      Write markdown summary for the LLM metrics report
   --no-teardown             Leave newly-created fixtures in place for debugging
   --help                    Show this help
 `;
@@ -55,7 +67,31 @@ async function main(): Promise<void> {
   const adapterCwd = arg("adapter-cwd");
   const timeoutMs = parseNumberArg("timeout-ms");
   const reuseFixtures = arg("reuse-fixtures");
+  const llmMetricsInputPath = arg("llm-metrics-input");
+  const llmMetricsReportPath = arg("llm-metrics-report");
+  const llmSummaryPath = arg("llm-summary");
   const skipTeardown = process.argv.includes("--no-teardown");
+
+  if ((llmMetricsReportPath || llmSummaryPath) && !llmMetricsInputPath) {
+    console.error("--llm-metrics-report and --llm-summary require --llm-metrics-input.");
+    process.exitCode = 2;
+    return;
+  }
+
+  if ((!suitePath || !adapter) && !llmMetricsInputPath) {
+    console.error(USAGE);
+    process.exitCode = 2;
+    return;
+  }
+
+  if (llmMetricsInputPath && !suitePath && !adapter) {
+    await writeLlmMetricsArtifacts({
+      inputPath: resolve(llmMetricsInputPath),
+      reportPath: llmMetricsReportPath ? resolve(llmMetricsReportPath) : undefined,
+      summaryPath: llmSummaryPath ? resolve(llmSummaryPath) : undefined,
+    });
+    return;
+  }
 
   if (!suitePath || !adapter) {
     console.error(USAGE);
@@ -82,6 +118,39 @@ async function main(): Promise<void> {
     skipTeardown,
     reuseFixtures,
   });
+
+  if (llmMetricsInputPath) {
+    await writeLlmMetricsArtifacts({
+      inputPath: resolve(llmMetricsInputPath),
+      reportPath: llmMetricsReportPath ? resolve(llmMetricsReportPath) : undefined,
+      summaryPath: llmSummaryPath ? resolve(llmSummaryPath) : undefined,
+      parityReportPath: resolve(report),
+    });
+  }
+}
+
+async function writeLlmMetricsArtifacts(options: {
+  inputPath: string;
+  reportPath?: string;
+  summaryPath?: string;
+  parityReportPath?: string;
+}): Promise<void> {
+  const input = await loadLlmMetricsInput(options.inputPath);
+  const reportInput = {
+    ...input,
+    parityReportPath: options.parityReportPath ?? input.parityReportPath,
+  };
+  const report = options.reportPath
+    ? await writeLlmMetricsReport(options.reportPath, reportInput)
+    : buildLlmMetricsReport(reportInput);
+
+  if (options.summaryPath) {
+    await writeLlmMetricsMarkdownSummary(options.summaryPath, report);
+  }
+
+  console.log("[llm-metrics] input:", options.inputPath);
+  if (options.reportPath) console.log("[llm-metrics] report:", options.reportPath);
+  if (options.summaryPath) console.log("[llm-metrics] summary:", options.summaryPath);
 }
 
 main().catch((e) => { console.error("FATAL:", e); process.exit(1); });
