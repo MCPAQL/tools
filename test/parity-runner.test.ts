@@ -8,6 +8,7 @@ import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { callMcpaql } from "../src/parity/calls.js";
 import { loadAdapterMetadata } from "../src/parity/metadata.js";
 import { runOperation } from "../src/parity/operation.js";
+import { mergeOfficialExtraHeaders } from "../src/parity/runner.js";
 import {
   applyParamMappings,
   canonicalize,
@@ -93,6 +94,33 @@ test("loadAdapterMetadata fails on malformed provenance", async (t) => {
     () => loadAdapterMetadata({ schemaPath, provenancePath }),
     /Failed to load adapter provenance/,
   );
+});
+
+test("mergeOfficialExtraHeaders strips Authorization so runtime token wins", (t) => {
+  const warnings: string[] = [];
+  const originalWarn = console.warn;
+  t.after(() => {
+    console.warn = originalWarn;
+  });
+  console.warn = (...args: unknown[]) => {
+    warnings.push(args.join(" "));
+  };
+
+  assert.deepEqual(
+    mergeOfficialExtraHeaders(
+      "test-suite",
+      "TEST_TOKEN",
+      { Authorization: "Bearer stale", "X-Suite": "suite" },
+      { authorization: "Bearer captured", "X-Schema": "schema" },
+    ),
+    {
+      "X-Suite": "suite",
+      "X-Schema": "schema",
+    },
+  );
+  assert.equal(warnings.some((warning) => warning.includes("schema header overrides suite header: Authorization")), true);
+  assert.equal(warnings.some((warning) => warning.includes("ignoring extra header \"Authorization\"")), true);
+  assert.equal(warnings.some((warning) => warning.includes("ignoring extra header \"authorization\"")), true);
 });
 
 test("normalize masks volatile keys recursively", () => {

@@ -18,11 +18,12 @@ export async function runParitySuite<F>(
   const adapterPaths = resolveAdapterPaths(options);
   const { schema, adapterOps, paramMappings, upstreamToolNames } = await loadAdapterMetadata(adapterPaths);
 
-  const officialExtraHeaders: Record<string, string> = {
-    ...(suite.upstreamHeaders ?? {}),
-    ...(schema.headers ?? {}),
-  };
-  warnOnHeaderOverrides(suite.name, suite.tokenEnv, suite.upstreamHeaders ?? {}, schema.headers ?? {}, officialExtraHeaders);
+  const officialExtraHeaders = mergeOfficialExtraHeaders(
+    suite.name,
+    suite.tokenEnv,
+    suite.upstreamHeaders ?? {},
+    schema.headers ?? {},
+  );
 
   const opSpecs = new Map(suite.operations.map((o) => [o.name, o]));
 
@@ -40,7 +41,7 @@ export async function runParitySuite<F>(
   }
 
   const officialTransport = new StreamableHTTPClientTransport(new URL(suite.upstreamUrl), {
-    requestInit: { headers: { Authorization: `Bearer ${token}`, ...officialExtraHeaders } },
+    requestInit: { headers: { ...officialExtraHeaders, Authorization: `Bearer ${token}` } },
   });
   const official = new Client({ name: "parity-official", version: "0.1.0" });
 
@@ -111,12 +112,24 @@ export async function runParitySuite<F>(
   return report;
 }
 
-function warnOnHeaderOverrides(
+export function mergeOfficialExtraHeaders(
   suiteName: string,
   tokenEnv: string,
   suiteHeaders: Record<string, string>,
   schemaHeaders: Record<string, string>,
-  mergedHeaders: Record<string, string>,
+): Record<string, string> {
+  const mergedHeaders = {
+    ...suiteHeaders,
+    ...schemaHeaders,
+  };
+  warnOnHeaderOverrides(suiteName, suiteHeaders, schemaHeaders);
+  return stripAuthorizationHeaders(suiteName, tokenEnv, mergedHeaders);
+}
+
+function warnOnHeaderOverrides(
+  suiteName: string,
+  suiteHeaders: Record<string, string>,
+  schemaHeaders: Record<string, string>,
 ): void {
   const suiteHeaderKeys = new Map(Object.keys(suiteHeaders).map((key) => [key.toLowerCase(), key]));
   for (const schemaKey of Object.keys(schemaHeaders)) {
@@ -125,10 +138,22 @@ function warnOnHeaderOverrides(
       console.warn(`[${suiteName}] schema header overrides suite header: ${suiteKey}`);
     }
   }
-  const authOverride = Object.keys(mergedHeaders).find((key) => key.toLowerCase() === "authorization");
-  if (authOverride) {
-    console.warn(`[${suiteName}] extra header "${authOverride}" overrides the Authorization header derived from ${tokenEnv}`);
+}
+
+function stripAuthorizationHeaders(
+  suiteName: string,
+  tokenEnv: string,
+  headers: Record<string, string>,
+): Record<string, string> {
+  const sanitizedHeaders: Record<string, string> = {};
+  for (const [key, value] of Object.entries(headers)) {
+    if (key.toLowerCase() === "authorization") {
+      console.warn(`[${suiteName}] ignoring extra header "${key}" so Authorization is derived from ${tokenEnv}`);
+    } else {
+      sanitizedHeaders[key] = value;
+    }
   }
+  return sanitizedHeaders;
 }
 
 function pad(s: string, n: number): string {
