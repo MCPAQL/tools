@@ -1,5 +1,5 @@
 import { readFile } from "node:fs/promises";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import type {
   AdapterMetadata,
   AdapterOperation,
@@ -28,8 +28,10 @@ export function endpointFromSchemaKey(value: string): Endpoint {
 export function resolveAdapterPaths(
   options: Pick<RunOptions<unknown>, "adapterServerJs" | "schemaPath" | "provenancePath" | "adapterCwd">,
 ): ResolvedAdapterPaths {
-  const serverDir = dirname(options.adapterServerJs);
+  const adapterServerJs = resolve(options.adapterServerJs);
+  const serverDir = dirname(adapterServerJs);
   return {
+    adapterServerJs,
     schemaPath: options.schemaPath ?? join(serverDir, "schema.json"),
     provenancePath: options.provenancePath ?? join(serverDir, "provenance.json"),
     adapterCwd: options.adapterCwd ?? (basename(serverDir) === "dist" ? dirname(serverDir) : serverDir),

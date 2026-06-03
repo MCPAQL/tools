@@ -130,6 +130,7 @@ export interface AdapterProvenance {
 }
 
 export interface ResolvedAdapterPaths {
+  adapterServerJs: string;
   schemaPath: string;
   provenancePath: string;
   adapterCwd: string;

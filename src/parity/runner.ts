@@ -44,7 +44,7 @@ export async function runParitySuite<F>(
 
   const mcpaqlTransport = new StdioClientTransport({
     command: "node",
-    args: [options.adapterServerJs],
+    args: [adapterPaths.adapterServerJs],
     cwd: adapterPaths.adapterCwd,
     env: { ...process.env, [suite.tokenEnv]: token } as Record<string, string>,
     stderr: "inherit",
@@ -97,7 +97,7 @@ export async function runParitySuite<F>(
     suite: suite.name,
     startedAt,
     finishedAt: new Date().toISOString(),
-    adapterPath: options.adapterServerJs,
+    adapterPath: adapterPaths.adapterServerJs,
     label: options.label,
     upstreamUrl: suite.upstreamUrl,
     totals,

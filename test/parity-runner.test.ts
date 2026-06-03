@@ -24,6 +24,7 @@ test("resolveAdapterPaths defaults to bundled files beside the adapter server", 
   const serverPath = path.join("/tmp", "adapter", "dist", "server.js");
 
   assert.deepEqual(resolveAdapterPaths({ adapterServerJs: serverPath }), {
+    adapterServerJs: serverPath,
     schemaPath: path.join("/tmp", "adapter", "dist", "schema.json"),
     provenancePath: path.join("/tmp", "adapter", "dist", "provenance.json"),
     adapterCwd: path.join("/tmp", "adapter"),
@@ -39,9 +40,28 @@ test("resolveAdapterPaths supports explicit overrides and non-dist server filena
     provenancePath: path.join("/tmp", "prov.json"),
     adapterCwd: path.join("/tmp", "work"),
   }), {
+    adapterServerJs: serverPath,
     schemaPath: path.join("/tmp", "schema.json"),
     provenancePath: path.join("/tmp", "prov.json"),
     adapterCwd: path.join("/tmp", "work"),
+  });
+});
+
+test("resolveAdapterPaths resolves relative adapter server paths before deriving cwd", async (t) => {
+  const previousCwd = process.cwd();
+  const root = await mkdtemp(path.join(tmpdir(), "parity-paths-"));
+  t.after(async () => {
+    process.chdir(previousCwd);
+    await rm(root, { recursive: true, force: true });
+  });
+  process.chdir(root);
+  const cwdRoot = process.cwd();
+
+  assert.deepEqual(resolveAdapterPaths({ adapterServerJs: path.join("adapter", "dist", "server.js") }), {
+    adapterServerJs: path.join(cwdRoot, "adapter", "dist", "server.js"),
+    schemaPath: path.join(cwdRoot, "adapter", "dist", "schema.json"),
+    provenancePath: path.join(cwdRoot, "adapter", "dist", "provenance.json"),
+    adapterCwd: path.join(cwdRoot, "adapter"),
   });
 });
 
