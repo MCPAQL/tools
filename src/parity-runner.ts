@@ -125,7 +125,7 @@ interface AdapterSchema {
 }
 
 interface AdapterProvenance {
-  operations: Array<{ operation_name: string; param_mappings?: Record<string, string> }>;
+  operations: Array<{ operation_name: string; source_tool_name?: string; param_mappings?: Record<string, string> }>;
 }
 
 export interface ResolvedAdapterPaths {
@@ -158,24 +158,32 @@ export function resolveAdapterPaths(options: Pick<RunOptions<unknown>, "adapterS
   };
 }
 
+export interface NormalizeOptions {
+  extraVolatileKeyPatterns?: readonly RegExp[];
+}
+
 const VOLATILE_KEY_PATTERNS = [
   /(^|_)id$/i, /^node_id$/i, /(^|_)url$/i, /^etag$/i, /^sha$/i,
   /^htmlUrl$/i, /^html_url$/i,
   /^created_at$/i, /^updated_at$/i, /^pushed_at$/i, /^merged_at$/i, /^closed_at$/i, /^last_modified$/i,
-  /^date$/i, /^number$/i, /^size$/i,
+  /^date$/i,
   /^x-github-/i, /^request_id$/i,
 ];
 
-function isVolatileKey(key: string): boolean {
-  return VOLATILE_KEY_PATTERNS.some((rx) => rx.test(key));
+const WRITE_VARIANT_NORMALIZE_OPTIONS: NormalizeOptions = {
+  extraVolatileKeyPatterns: [/^number$/i, /^size$/i],
+};
+
+function isVolatileKey(key: string, options: NormalizeOptions = {}): boolean {
+  return [...VOLATILE_KEY_PATTERNS, ...(options.extraVolatileKeyPatterns ?? [])].some((rx) => rx.test(key));
 }
 
-export function normalize(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(normalize);
+export function normalize(value: unknown, options: NormalizeOptions = {}): unknown {
+  if (Array.isArray(value)) return value.map((item) => normalize(item, options));
   if (value && typeof value === "object") {
     const out: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(value)) {
-      out[k] = isVolatileKey(k) ? "<VOL>" : normalize(v);
+      out[k] = isVolatileKey(k, options) ? "<VOL>" : normalize(v, options);
     }
     return out;
   }
@@ -216,6 +224,13 @@ export function applyParamMappings(
   return out;
 }
 
+export function resolveUpstreamToolName(
+  operationName: string,
+  upstreamToolNames: Record<string, string> | undefined,
+): string {
+  return upstreamToolNames?.[operationName] ?? operationName;
+}
+
 export function extractOfficialPayload(raw: unknown): unknown {
   if (!raw || typeof raw !== "object") return raw;
   const r = raw as { content?: Array<{ type: string; text?: string }>; structuredContent?: unknown };
@@ -243,6 +258,7 @@ export function extractMcpaqlPayload(envelope: unknown): unknown {
 export function classify(
   officialOk: boolean, mcpaqlOk: boolean,
   officialPayload: unknown, mcpaqlPayload: unknown,
+  options: NormalizeOptions = {},
 ): { cls: ParityClass; detail?: string } {
   const safe = (x: unknown) => (JSON.stringify(canonicalize(x)) ?? "<undefined>").slice(0, 200);
   if (!officialOk && !mcpaqlOk) return { cls: "BOTH_ERROR", detail: `official: ${safe(officialPayload)} | mcpaql: ${safe(mcpaqlPayload)}` };
@@ -251,10 +267,12 @@ export function classify(
   const offRaw = JSON.stringify(canonicalize(officialPayload)) ?? "<undefined>";
   const mcpRaw = JSON.stringify(canonicalize(mcpaqlPayload)) ?? "<undefined>";
   if (offRaw === mcpRaw) return { cls: "IDENTICAL" };
-  const offNorm = JSON.stringify(canonicalize(normalize(officialPayload)));
-  const mcpNorm = JSON.stringify(canonicalize(normalize(mcpaqlPayload)));
+  const normalizedOfficial = normalize(officialPayload, options);
+  const normalizedMcpaql = normalize(mcpaqlPayload, options);
+  const offNorm = JSON.stringify(canonicalize(normalizedOfficial));
+  const mcpNorm = JSON.stringify(canonicalize(normalizedMcpaql));
   if (offNorm === mcpNorm) return { cls: "STRUCTURAL_PARITY" };
-  return { cls: "DIVERGENT", detail: firstDiff(normalize(officialPayload), normalize(mcpaqlPayload), "") };
+  return { cls: "DIVERGENT", detail: firstDiff(normalizedOfficial, normalizedMcpaql, "") };
 }
 
 export function firstDiff(a: unknown, b: unknown, path = ""): string {
@@ -335,9 +353,13 @@ export async function runParitySuite<F>(
   // Load adapter schema (operations list) and provenance (param mappings).
   const schema = JSON.parse(await readFile(adapterPaths.schemaPath, "utf8")) as AdapterSchema;
   const paramMappings: Record<string, Record<string, string>> = {};
+  const upstreamToolNames: Record<string, string> = {};
   try {
     const prov = JSON.parse(await readFile(adapterPaths.provenancePath, "utf8")) as AdapterProvenance;
-    for (const op of prov.operations) if (op.param_mappings) paramMappings[op.operation_name] = op.param_mappings;
+    for (const op of prov.operations) {
+      if (op.param_mappings) paramMappings[op.operation_name] = op.param_mappings;
+      if (op.source_tool_name) upstreamToolNames[op.operation_name] = op.source_tool_name;
+    }
   } catch { /* provenance optional */ }
 
   // The adapter's bundled schema may carry headers captured at discovery time
@@ -409,7 +431,7 @@ export async function runParitySuite<F>(
         result = { name: adapterOp.name, endpoint: adapterOp.endpoint, category: "SKIP", cls: "SKIPPED", detail: "no suite arg builder", ms: 0 };
       } else {
         try {
-          result = await runOperation(spec, adapterOp.endpoint, fixtures, official, mcpaql, paramMappings[spec.name], paramMappings, timeoutMs);
+          result = await runOperation(spec, adapterOp.endpoint, fixtures, official, mcpaql, upstreamToolNames, paramMappings[spec.name], paramMappings, timeoutMs);
         } catch (e) {
           result = { name: spec.name, endpoint: adapterOp.endpoint, category: spec.category, cls: "MCPAQL_ERROR", detail: `harness exception: ${(e as Error).message}`, ms: 0 };
         }
@@ -475,6 +497,7 @@ async function runOperation<F>(
   fixtures: F,
   official: Client,
   mcpaql: Client,
+  upstreamToolNames: Record<string, string>,
   mapping: Record<string, string> | undefined,
   allMappings: Record<string, Record<string, string>>,
   timeoutMs: number,
@@ -484,11 +507,12 @@ async function runOperation<F>(
 
   const argsOff = spec.args(fixtures, "official");
   const argsMcp = spec.args(fixtures, "mcpaql");
+  const upstreamToolName = resolveUpstreamToolName(spec.name, upstreamToolNames);
 
   if (cat === "PURE_READ" || cat === "PUBLIC_READ" || cat === "TEST_REPO_READ" || cat === "ORG_READ") {
     if (!argsOff || !argsMcp) return { name: spec.name, endpoint, category: cat, cls: "SKIPPED", detail: "missing fixture", ms: 0 };
     const [off, mcp] = await Promise.all([
-      callOfficial(official, spec.name, applyParamMappings(argsOff, mapping), timeoutMs),
+      callOfficial(official, upstreamToolName, applyParamMappings(argsOff, mapping), timeoutMs),
       callMcpaql(mcpaql, endpoint, spec.name, argsMcp, timeoutMs),
     ]);
     const offP = extractOfficialPayload(off.raw);
@@ -499,12 +523,12 @@ async function runOperation<F>(
 
   if (cat === "PAIRED_WRITE" || cat === "COPILOT") {
     if (!argsOff || !argsMcp) return { name: spec.name, endpoint, category: cat, cls: "SKIPPED", detail: "missing fixture", ms: 0 };
-    const off = await callOfficial(official, spec.name, applyParamMappings(argsOff, mapping), timeoutMs);
+    const off = await callOfficial(official, upstreamToolName, applyParamMappings(argsOff, mapping), timeoutMs);
     const mcp = await callMcpaql(mcpaql, endpoint, spec.name, argsMcp, timeoutMs);
     const offP = extractOfficialPayload(off.raw);
     const mcpP = extractMcpaqlPayload(mcp.envelope);
     const offM = maskVariantTokens(offP), mcpM = maskVariantTokens(mcpP);
-    const { cls, detail } = classify(off.ok, mcp.ok, offM, mcpM);
+    const { cls, detail } = classify(off.ok, mcp.ok, offM, mcpM, WRITE_VARIANT_NORMALIZE_OPTIONS);
     return { name: spec.name, endpoint, category: cat, cls, detail, ms: 0, officialOk: off.ok, mcpaqlOk: mcp.ok };
   }
 
@@ -516,7 +540,8 @@ async function runOperation<F>(
     if (spec.verify) {
       const vArgs = spec.verify.args(fixtures, "official");
       if (vArgs) {
-        const v = await callOfficial(official, spec.verify.name, applyParamMappings(vArgs, allMappings[spec.verify.name]), timeoutMs);
+        const verifyUpstreamToolName = resolveUpstreamToolName(spec.verify.name, upstreamToolNames);
+        const v = await callOfficial(official, verifyUpstreamToolName, applyParamMappings(vArgs, allMappings[spec.verify.name]), timeoutMs);
         return { name: spec.name, endpoint, category: cat, cls: v.ok ? "STRUCTURAL_PARITY" : "MCPAQL_ERROR", detail: v.ok ? `verified via ${spec.verify.name}` : "verify call failed", ms: 0, mcpaqlOk: true };
       }
     }

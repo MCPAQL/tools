@@ -12,6 +12,7 @@ import {
   maskVariantTokens,
   normalize,
   resolveAdapterPaths,
+  resolveUpstreamToolName,
 } from "../src/parity-runner.js";
 
 test("resolveAdapterPaths defaults to bundled files beside the adapter server", () => {
@@ -67,6 +68,13 @@ test("normalize masks volatile keys recursively", () => {
   });
 });
 
+test("normalize preserves stable numeric fields by default", () => {
+  assert.deepEqual(
+    normalize({ number: 1, size: 200, nested: { id: "abc" } }),
+    { number: 1, size: 200, nested: { id: "<VOL>" } },
+  );
+});
+
 test("canonicalize recursively sorts object keys without reordering arrays", () => {
   const canonical = canonicalize({
     z: 1,
@@ -98,6 +106,14 @@ test("applyParamMappings renames mapped params and preserves unmapped params", (
     applyParamMappings({ owner: "MCPAQL", repo: "tools", unchanged: true }, { repo: "repository" }),
     { owner: "MCPAQL", repository: "tools", unchanged: true },
   );
+});
+
+test("resolveUpstreamToolName uses provenance source names when available", () => {
+  assert.equal(
+    resolveUpstreamToolName("create_issue", { create_issue: "Create Issue" }),
+    "Create Issue",
+  );
+  assert.equal(resolveUpstreamToolName("list_issues", {}), "list_issues");
 });
 
 test("extractOfficialPayload prefers structured content and parses JSON text", () => {
@@ -140,6 +156,26 @@ test("classify treats key-order-only differences as identical", () => {
 test("classify treats volatile-only differences as structural parity", () => {
   assert.deepEqual(
     classify(true, true, { id: 1, name: "repo" }, { id: 2, name: "repo" }),
+    { cls: "STRUCTURAL_PARITY" },
+  );
+});
+
+test("classify treats number and size differences as divergent by default", () => {
+  assert.equal(
+    classify(true, true, { number: 1, size: 200 }, { number: 2, size: 201 }).cls,
+    "DIVERGENT",
+  );
+});
+
+test("classify can mask write-variant numeric metadata explicitly", () => {
+  assert.deepEqual(
+    classify(
+      true,
+      true,
+      { number: 1, size: 200, name: "created" },
+      { number: 2, size: 201, name: "created" },
+      { extraVolatileKeyPatterns: [/^number$/i, /^size$/i] },
+    ),
     { cls: "STRUCTURAL_PARITY" },
   );
 });
