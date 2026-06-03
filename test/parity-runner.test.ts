@@ -8,7 +8,7 @@ import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { callMcpaql } from "../src/parity/calls.js";
 import { loadAdapterMetadata } from "../src/parity/metadata.js";
 import { runOperation } from "../src/parity/operation.js";
-import { mergeOfficialExtraHeaders, runParitySuite, writeRunReport } from "../src/parity/runner.js";
+import { closeParityClients, mergeOfficialExtraHeaders, runParitySuite, writeRunReport } from "../src/parity/runner.js";
 import {
   applyParamMappings,
   canonicalize,
@@ -186,6 +186,25 @@ test("writeRunReport creates missing report directories", async (t) => {
   const report = JSON.parse(await readFile(reportPath, "utf8")) as { suite: string; totals: Record<string, number> };
   assert.equal(report.suite, "report-suite");
   assert.deepEqual(report.totals, { TOTAL: 0 });
+});
+
+test("closeParityClients closes both clients even when setup did not fully connect", async () => {
+  const closed = new Set<string>();
+
+  await closeParityClients(
+    {
+      async close() {
+        closed.add("official");
+      },
+    },
+    {
+      async close() {
+        closed.add("mcpaql");
+      },
+    },
+  );
+
+  assert.deepEqual(closed, new Set(["official", "mcpaql"]));
 });
 
 test("normalize masks volatile keys recursively", () => {

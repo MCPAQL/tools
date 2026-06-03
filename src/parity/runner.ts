@@ -8,6 +8,7 @@ import { runOperation } from "./operation.js";
 import type { OpResult, RunOptions, RunReport, Suite } from "./types.js";
 
 type UntimedOpResult = Omit<OpResult, "ms">;
+type ClosableClient = Pick<Client, "close">;
 
 export async function runParitySuite<F>(
   suite: Suite<F>,
@@ -47,8 +48,6 @@ export async function runParitySuite<F>(
   const ops: OpResult[] = [];
   const totals: Record<string, number> = { TOTAL: 0 };
   const startedAt = new Date().toISOString();
-  let officialConnected = false;
-  let mcpaqlConnected = false;
 
   try {
     const officialTransport = new StreamableHTTPClientTransport(new URL(suite.upstreamUrl), {
@@ -63,9 +62,7 @@ export async function runParitySuite<F>(
     });
 
     await official.connect(officialTransport);
-    officialConnected = true;
     await mcpaql.connect(mcpaqlTransport);
-    mcpaqlConnected = true;
 
     for (const adapterOp of adapterOps) {
       const t0 = Date.now();
@@ -88,10 +85,7 @@ export async function runParitySuite<F>(
       console.log(`  ${pad(adapterOp.name, 44)} ${pad(timedResult.category, 18)} -> ${timedResult.cls}${timedResult.detail ? " :: " + timedResult.detail.slice(0, 80) : ""}`);
     }
   } finally {
-    await Promise.allSettled([
-      officialConnected ? official.close() : Promise.resolve(),
-      mcpaqlConnected ? mcpaql.close() : Promise.resolve(),
-    ]);
+    await closeParityClients(official, mcpaql);
     if (!options.skipTeardown && !options.reuseFixtures) {
       try { await suite.teardownFixtures(fixtures); } catch (e) { console.error(`[${suite.name}] teardown failed:`, (e as Error).message); }
     }
@@ -115,6 +109,16 @@ export async function runParitySuite<F>(
 
 export async function writeRunReport(reportPath: string, report: RunReport): Promise<void> {
   await writeJsonFile(reportPath, report);
+}
+
+export async function closeParityClients(
+  official: ClosableClient,
+  mcpaql: ClosableClient,
+): Promise<void> {
+  await Promise.allSettled([
+    official.close(),
+    mcpaql.close(),
+  ]);
 }
 
 export function mergeOfficialExtraHeaders(
