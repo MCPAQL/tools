@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -8,7 +8,7 @@ import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { callMcpaql } from "../src/parity/calls.js";
 import { loadAdapterMetadata } from "../src/parity/metadata.js";
 import { runOperation } from "../src/parity/operation.js";
-import { mergeOfficialExtraHeaders } from "../src/parity/runner.js";
+import { mergeOfficialExtraHeaders, runParitySuite } from "../src/parity/runner.js";
 import {
   applyParamMappings,
   canonicalize,
@@ -110,17 +110,62 @@ test("mergeOfficialExtraHeaders strips Authorization so runtime token wins", (t)
     mergeOfficialExtraHeaders(
       "test-suite",
       "TEST_TOKEN",
-      { Authorization: "Bearer stale", "X-Suite": "suite" },
-      { authorization: "Bearer captured", "X-Schema": "schema" },
+      { Authorization: "Bearer stale", "X-MCP-Toolsets": "suite-tools", "X-Suite": "suite" },
+      { authorization: "Bearer captured", "x-mcp-toolsets": "schema-tools", "X-Schema": "schema" },
     ),
     {
+      "x-mcp-toolsets": "schema-tools",
       "X-Suite": "suite",
       "X-Schema": "schema",
     },
   );
   assert.equal(warnings.some((warning) => warning.includes("schema header overrides suite header: Authorization")), true);
-  assert.equal(warnings.some((warning) => warning.includes("ignoring extra header \"Authorization\"")), true);
+  assert.equal(warnings.some((warning) => warning.includes("schema header overrides suite header: X-MCP-Toolsets")), true);
   assert.equal(warnings.some((warning) => warning.includes("ignoring extra header \"authorization\"")), true);
+});
+
+test("runParitySuite tears down fixtures when transport creation fails", async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), "parity-teardown-"));
+  const dist = path.join(root, "dist");
+  await mkdir(dist);
+  await writeFile(path.join(dist, "schema.json"), JSON.stringify({ operations: {} }));
+
+  const tokenEnv = "PARITY_TEST_TOKEN";
+  const previousToken = process.env[tokenEnv];
+  process.env[tokenEnv] = "test-token";
+  t.after(async () => {
+    if (previousToken === undefined) {
+      delete process.env[tokenEnv];
+    } else {
+      process.env[tokenEnv] = previousToken;
+    }
+    await rm(root, { recursive: true, force: true });
+  });
+
+  let tornDown = false;
+  await assert.rejects(
+    () => runParitySuite(
+      {
+        name: "bad-url-suite",
+        upstreamUrl: "not a url",
+        tokenEnv,
+        operations: [],
+        async setupFixtures() {
+          return { created: true };
+        },
+        async teardownFixtures(fixtures) {
+          tornDown = fixtures.created;
+        },
+      },
+      {
+        adapterServerJs: path.join(dist, "server.js"),
+        reportPath: path.join(root, "report.json"),
+      },
+    ),
+    /Invalid URL/,
+  );
+
+  assert.equal(tornDown, true);
 });
 
 test("normalize masks volatile keys recursively", () => {

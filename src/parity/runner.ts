@@ -40,18 +40,7 @@ export async function runParitySuite<F>(
     fixtures = await suite.setupFixtures();
   }
 
-  const officialTransport = new StreamableHTTPClientTransport(new URL(suite.upstreamUrl), {
-    requestInit: { headers: { ...officialExtraHeaders, Authorization: `Bearer ${token}` } },
-  });
   const official = new Client({ name: "parity-official", version: "0.1.0" });
-
-  const mcpaqlTransport = new StdioClientTransport({
-    command: "node",
-    args: [adapterPaths.adapterServerJs],
-    cwd: adapterPaths.adapterCwd,
-    env: { ...process.env, [suite.tokenEnv]: token } as Record<string, string>,
-    stderr: "inherit",
-  });
   const mcpaql = new Client({ name: "parity-mcpaql", version: "0.1.0" });
 
   const ops: OpResult[] = [];
@@ -61,6 +50,17 @@ export async function runParitySuite<F>(
   let mcpaqlConnected = false;
 
   try {
+    const officialTransport = new StreamableHTTPClientTransport(new URL(suite.upstreamUrl), {
+      requestInit: { headers: { ...officialExtraHeaders, Authorization: `Bearer ${token}` } },
+    });
+    const mcpaqlTransport = new StdioClientTransport({
+      command: "node",
+      args: [adapterPaths.adapterServerJs],
+      cwd: adapterPaths.adapterCwd,
+      env: { ...process.env, [suite.tokenEnv]: token } as Record<string, string>,
+      stderr: "inherit",
+    });
+
     await official.connect(officialTransport);
     officialConnected = true;
     await mcpaql.connect(mcpaqlTransport);
@@ -118,12 +118,28 @@ export function mergeOfficialExtraHeaders(
   suiteHeaders: Record<string, string>,
   schemaHeaders: Record<string, string>,
 ): Record<string, string> {
-  const mergedHeaders = {
-    ...suiteHeaders,
-    ...schemaHeaders,
-  };
+  const mergedHeaders = mergeHeadersCaseInsensitive(suiteHeaders, schemaHeaders);
   warnOnHeaderOverrides(suiteName, suiteHeaders, schemaHeaders);
   return stripAuthorizationHeaders(suiteName, tokenEnv, mergedHeaders);
+}
+
+function mergeHeadersCaseInsensitive(
+  suiteHeaders: Record<string, string>,
+  schemaHeaders: Record<string, string>,
+): Record<string, string> {
+  const mergedHeaders = { ...suiteHeaders };
+  const mergedKeysByLowercase = new Map(Object.keys(mergedHeaders).map((key) => [key.toLowerCase(), key]));
+
+  for (const [schemaKey, schemaValue] of Object.entries(schemaHeaders)) {
+    const existingKey = mergedKeysByLowercase.get(schemaKey.toLowerCase());
+    if (existingKey && existingKey !== schemaKey) {
+      delete mergedHeaders[existingKey];
+    }
+    mergedHeaders[schemaKey] = schemaValue;
+    mergedKeysByLowercase.set(schemaKey.toLowerCase(), schemaKey);
+  }
+
+  return mergedHeaders;
 }
 
 function warnOnHeaderOverrides(
