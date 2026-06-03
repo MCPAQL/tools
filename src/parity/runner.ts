@@ -1,7 +1,8 @@
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { writeJsonFile } from "../shared.js";
 import { DEFAULT_TIMEOUT_MS, loadAdapterMetadata, resolveAdapterPaths } from "./metadata.js";
 import { runOperation } from "./operation.js";
 import type { OpResult, RunOptions, RunReport, Suite } from "./types.js";
@@ -106,10 +107,14 @@ export async function runParitySuite<F>(
     totals,
     ops,
   };
-  await writeFile(options.reportPath, JSON.stringify(report, null, 2));
+  await writeRunReport(options.reportPath, report);
   console.log(`[${suite.name}] report:`, options.reportPath);
   console.log(`[${suite.name}] totals:`, totals);
   return report;
+}
+
+export async function writeRunReport(reportPath: string, report: RunReport): Promise<void> {
+  await writeJsonFile(reportPath, report);
 }
 
 export function mergeOfficialExtraHeaders(

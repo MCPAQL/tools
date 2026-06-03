@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -8,7 +8,7 @@ import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { callMcpaql } from "../src/parity/calls.js";
 import { loadAdapterMetadata } from "../src/parity/metadata.js";
 import { runOperation } from "../src/parity/operation.js";
-import { mergeOfficialExtraHeaders, runParitySuite } from "../src/parity/runner.js";
+import { mergeOfficialExtraHeaders, runParitySuite, writeRunReport } from "../src/parity/runner.js";
 import {
   applyParamMappings,
   canonicalize,
@@ -166,6 +166,26 @@ test("runParitySuite tears down fixtures when transport creation fails", async (
   );
 
   assert.equal(tornDown, true);
+});
+
+test("writeRunReport creates missing report directories", async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), "parity-report-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const reportPath = path.join(root, "nested", "reports", "parity-report.json");
+
+  await writeRunReport(reportPath, {
+    suite: "report-suite",
+    startedAt: "2026-06-03T00:00:00.000Z",
+    finishedAt: "2026-06-03T00:00:01.000Z",
+    adapterPath: "/tmp/adapter/dist/server.js",
+    upstreamUrl: "https://example.test/mcp",
+    totals: { TOTAL: 0 },
+    ops: [],
+  });
+
+  const report = JSON.parse(await readFile(reportPath, "utf8")) as { suite: string; totals: Record<string, number> };
+  assert.equal(report.suite, "report-suite");
+  assert.deepEqual(report.totals, { TOTAL: 0 });
 });
 
 test("normalize masks volatile keys recursively", () => {
