@@ -9,6 +9,7 @@ import {
   extractMcpaqlPayload,
   extractOfficialPayload,
   firstDiff,
+  isExpectedVerifyResult,
   maskVariantTokens,
   normalize,
   resolveAdapterPaths,
@@ -114,6 +115,39 @@ test("resolveUpstreamToolName uses provenance source names when available", () =
     "Create Issue",
   );
   assert.equal(resolveUpstreamToolName("list_issues", {}), "list_issues");
+});
+
+test("isExpectedVerifyResult defaults to successful verify calls", () => {
+  assert.equal(
+    isExpectedVerifyResult({}, { ok: true, raw: {}, payload: { exists: true } }, {}),
+    true,
+  );
+  assert.equal(
+    isExpectedVerifyResult({}, { ok: false, raw: null, payload: null, error: "not found" }, {}),
+    false,
+  );
+});
+
+test("isExpectedVerifyResult supports negative verification for deletes", () => {
+  assert.equal(
+    isExpectedVerifyResult({ expect: "error" }, { ok: false, raw: null, payload: null, error: "not found" }, {}),
+    true,
+  );
+  assert.equal(
+    isExpectedVerifyResult({ expect: "error" }, { ok: true, raw: {}, payload: { stillThere: true } }, {}),
+    false,
+  );
+});
+
+test("isExpectedVerifyResult supports custom predicates", () => {
+  assert.equal(
+    isExpectedVerifyResult(
+      { isExpected: (result) => result.payload === "gone" },
+      { ok: true, raw: "gone", payload: "gone" },
+      {},
+    ),
+    true,
+  );
 });
 
 test("extractOfficialPayload prefers structured content and parses JSON text", () => {

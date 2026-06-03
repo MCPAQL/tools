@@ -37,6 +37,7 @@ export type ParityClass =
   | "DIVERGENT"
   | "OFFICIAL_ERROR"
   | "MCPAQL_ERROR"
+  | "HARNESS_ERROR"
   | "BOTH_ERROR"
   | "SKIPPED";
 
@@ -44,6 +45,24 @@ export type ArgBuilder<F> = (
   fixtures: F,
   variant: "official" | "mcpaql",
 ) => Record<string, unknown> | null;
+
+export type VerifyExpectation = "success" | "error";
+
+export interface VerifyCallResult {
+  ok: boolean;
+  raw: unknown;
+  payload: unknown;
+  error?: string;
+}
+
+export interface VerifySpec<F> {
+  name: string;
+  args: ArgBuilder<F>;
+  /** Expected official-side verify call outcome. Defaults to "success". */
+  expect?: VerifyExpectation;
+  /** Optional predicate for verification semantics that cannot be expressed as success/error. */
+  isExpected?: (result: VerifyCallResult, fixtures: F) => boolean;
+}
 
 export interface OperationSpec<F> {
   /** The operation name as it appears in the adapter's schema. */
@@ -53,7 +72,7 @@ export interface OperationSpec<F> {
   /** Build arguments for the given variant; return null to skip this variant. */
   args: ArgBuilder<F>;
   /** For ONESHOT_WRITE: an op to call afterward to verify the mutation took effect. */
-  verify?: { name: string; args: ArgBuilder<F> };
+  verify?: VerifySpec<F>;
   /** Human-readable note explaining a SKIP or unusual semantic. */
   note?: string;
 }
@@ -229,6 +248,15 @@ export function resolveUpstreamToolName(
   upstreamToolNames: Record<string, string> | undefined,
 ): string {
   return upstreamToolNames?.[operationName] ?? operationName;
+}
+
+export function isExpectedVerifyResult<F>(
+  verify: Pick<VerifySpec<F>, "expect" | "isExpected">,
+  result: VerifyCallResult,
+  fixtures: F,
+): boolean {
+  if (verify.isExpected) return verify.isExpected(result, fixtures);
+  return verify.expect === "error" ? !result.ok : result.ok;
 }
 
 export function extractOfficialPayload(raw: unknown): unknown {
@@ -433,7 +461,7 @@ export async function runParitySuite<F>(
         try {
           result = await runOperation(spec, adapterOp.endpoint, fixtures, official, mcpaql, upstreamToolNames, paramMappings[spec.name], paramMappings, timeoutMs);
         } catch (e) {
-          result = { name: spec.name, endpoint: adapterOp.endpoint, category: spec.category, cls: "MCPAQL_ERROR", detail: `harness exception: ${(e as Error).message}`, ms: 0 };
+          result = { name: spec.name, endpoint: adapterOp.endpoint, category: spec.category, cls: "HARNESS_ERROR", detail: `harness exception: ${(e as Error).message}`, ms: 0 };
         }
         if (spec.note) result.note = spec.note;
       }
@@ -542,7 +570,24 @@ async function runOperation<F>(
       if (vArgs) {
         const verifyUpstreamToolName = resolveUpstreamToolName(spec.verify.name, upstreamToolNames);
         const v = await callOfficial(official, verifyUpstreamToolName, applyParamMappings(vArgs, allMappings[spec.verify.name]), timeoutMs);
-        return { name: spec.name, endpoint, category: cat, cls: v.ok ? "STRUCTURAL_PARITY" : "MCPAQL_ERROR", detail: v.ok ? `verified via ${spec.verify.name}` : "verify call failed", ms: 0, mcpaqlOk: true };
+        const verifyResult: VerifyCallResult = {
+          ok: v.ok,
+          raw: v.raw,
+          payload: extractOfficialPayload(v.raw),
+          error: v.error,
+        };
+        const verified = isExpectedVerifyResult(spec.verify, verifyResult, fixtures);
+        const expectation = spec.verify.isExpected ? "predicate" : (spec.verify.expect ?? "success");
+        return {
+          name: spec.name,
+          endpoint,
+          category: cat,
+          cls: verified ? "STRUCTURAL_PARITY" : "MCPAQL_ERROR",
+          detail: verified ? `verified via ${spec.verify.name} (${expectation})` : `verify call did not match expected ${expectation}${v.error ? `: ${v.error}` : ""}`,
+          ms: 0,
+          officialOk: v.ok,
+          mcpaqlOk: true,
+        };
       }
     }
     return { name: spec.name, endpoint, category: cat, cls: "UNVERIFIED_WRITE", detail: "no verify configured", ms: 0, mcpaqlOk: true };
