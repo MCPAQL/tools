@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import Ajv from "ajv";
 
 import { callMcpaql } from "../src/parity/calls.js";
 import { loadAdapterMetadata } from "../src/parity/metadata.js";
@@ -11,16 +12,22 @@ import { runOperation } from "../src/parity/operation.js";
 import { closeParityClients, mergeOfficialExtraHeaders, runParitySuite, writeRunReport } from "../src/parity/runner.js";
 import {
   applyParamMappings,
+  buildLlmMetricsReport,
   canonicalize,
   classify,
+  LLM_METRICS_REPORT_SCHEMA,
   extractMcpaqlPayload,
   extractOfficialPayload,
   firstDiff,
   isExpectedVerifyResult,
   maskVariantTokens,
   normalize,
+  renderLlmMetricsMarkdownSummary,
   resolveAdapterPaths,
   resolveUpstreamToolName,
+  writeLlmMetricsMarkdownSummary,
+  writeLlmMetricsReport,
+  type LlmMetricsReportInput,
 } from "../src/parity-runner.js";
 
 test("resolveAdapterPaths defaults to bundled files beside the adapter server", () => {
@@ -186,6 +193,87 @@ test("writeRunReport creates missing report directories", async (t) => {
   const report = JSON.parse(await readFile(reportPath, "utf8")) as { suite: string; totals: Record<string, number> };
   assert.equal(report.suite, "report-suite");
   assert.deepEqual(report.totals, { TOTAL: 0 });
+});
+
+test("buildLlmMetricsReport aggregates task-level LLM correctness metrics", () => {
+  const report = buildLlmMetricsReport(sampleLlmMetricsInput());
+
+  assert.equal(report.schemaVersion, "mcpaql.llm-metrics.v1");
+  assert.equal(report.reportKind, "mcpaql-llm-metrics");
+  assert.equal(report.aggregates.length, 2);
+
+  const raw = report.aggregates.find((aggregate) => aggregate.configId === "raw_mcp");
+  assert.ok(raw);
+  assert.deepEqual(raw.firstCallSuccess, { successCount: 1, measuredCount: 2, rate: 0.5 });
+  assert.deepEqual(raw.turnsToCompletion, { measuredCount: 1, total: 3, average: 3 });
+  assert.deepEqual(raw.tokensToCompletion, { measuredCount: 1, total: 1000, average: 1000 });
+  assert.deepEqual(raw.inducedErrorRecovery, {
+    injectedTaskCount: 1,
+    measuredCount: 1,
+    recoveredWithinTwoTurnsCount: 0,
+    rate: 0,
+  });
+
+  const adapted = report.aggregates.find((aggregate) => aggregate.configId === "mcpaql_adapted");
+  assert.ok(adapted);
+  assert.deepEqual(adapted.firstCallSuccess, { successCount: 2, measuredCount: 2, rate: 1 });
+  assert.deepEqual(adapted.turnsToCompletion, { measuredCount: 2, total: 3, average: 1.5 });
+  assert.deepEqual(adapted.tokensToCompletion, { measuredCount: 2, total: 800, average: 400 });
+  assert.deepEqual(adapted.inducedErrorRecovery, {
+    injectedTaskCount: 1,
+    measuredCount: 1,
+    recoveredWithinTwoTurnsCount: 1,
+    rate: 1,
+  });
+});
+
+test("LLM metrics report schema validates generated reports", () => {
+  const report = buildLlmMetricsReport(sampleLlmMetricsInput());
+  const ajv = new Ajv({ strict: false });
+  const validate = ajv.compile(LLM_METRICS_REPORT_SCHEMA);
+
+  assert.equal(validate(report), true, JSON.stringify(validate.errors, null, 2));
+});
+
+test("renderLlmMetricsMarkdownSummary uses the normalized report data", () => {
+  const markdown = renderLlmMetricsMarkdownSummary(buildLlmMetricsReport(sampleLlmMetricsInput()));
+
+  assert.match(markdown, /LLM Correctness Metrics: github-mcp/);
+  assert.match(markdown, /Raw MCP/);
+  assert.match(markdown, /MCPAQL adapted MCP/);
+  assert.match(markdown, /50\.0% \(1\/2\)/);
+  assert.match(markdown, /recovered within 2 turns/);
+  assert.match(markdown, /transcripts: `artifacts\/llm\/raw-list-issues.jsonl`/);
+  assert.match(markdown, /Missing task metrics are shown as n\/a/);
+});
+
+test("writeLlmMetricsReport and markdown summary create missing directories", async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), "llm-metrics-report-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const reportPath = path.join(root, "nested", "metrics", "llm-metrics.json");
+  const summaryPath = path.join(root, "nested", "metrics", "llm-metrics.md");
+
+  const report = await writeLlmMetricsReport(reportPath, sampleLlmMetricsInput());
+  await writeLlmMetricsMarkdownSummary(summaryPath, report);
+
+  const persistedReport = JSON.parse(await readFile(reportPath, "utf8")) as { schemaVersion: string; aggregates: unknown[] };
+  const persistedSummary = await readFile(summaryPath, "utf8");
+  assert.equal(persistedReport.schemaVersion, "mcpaql.llm-metrics.v1");
+  assert.equal(persistedReport.aggregates.length, 2);
+  assert.match(persistedSummary, /## Summary/);
+});
+
+test("buildLlmMetricsReport rejects task results with unknown configurations", () => {
+  const input = sampleLlmMetricsInput();
+  input.taskResults[0] = {
+    ...input.taskResults[0],
+    configId: "unknown" as "raw_mcp",
+  };
+
+  assert.throws(
+    () => buildLlmMetricsReport(input),
+    /references unknown LLM metrics configuration "unknown"/,
+  );
 });
 
 test("closeParityClients closes both clients even when setup did not fully connect", async () => {
@@ -358,6 +446,117 @@ test("runOperation distinguishes null verify args from missing verify and leaves
   assert.equal(result.detail, "verify args returned null");
   assert.equal("ms" in result, false);
 });
+
+function sampleLlmMetricsInput(): LlmMetricsReportInput {
+  return {
+    suite: "github-mcp",
+    label: "fixture-only",
+    generatedAt: "2026-06-03T00:00:00.000Z",
+    model: {
+      provider: "anthropic",
+      model: "claude-sonnet-4",
+      version: "2026-06-01",
+    },
+    configurations: [
+      {
+        id: "raw_mcp",
+        label: "Raw MCP",
+        server: {
+          kind: "raw_mcp",
+          name: "github-mcp-server",
+          toolDefinitionsPath: "artifacts/llm/raw-tools.json",
+        },
+      },
+      {
+        id: "mcpaql_adapted",
+        label: "MCPAQL adapted MCP",
+        server: {
+          kind: "mcpaql_adapter",
+          adapterPath: "examples/github-adapter/dist/server.js",
+          schemaPath: "examples/github-adapter/dist/schema.json",
+          provenancePath: "examples/github-adapter/dist/provenance.json",
+        },
+      },
+    ],
+    rawDataPaths: {
+      fixtures: ["artifacts/llm/fixtures.json"],
+    },
+    parityReportPath: "artifacts/parity/parity-report.json",
+    taskResults: [
+      {
+        taskId: "list-issues",
+        taskName: "List repository issues",
+        configId: "raw_mcp",
+        outcome: "completed",
+        firstCallSuccess: false,
+        turnsToCompletion: 3,
+        tokensToCompletion: {
+          prompt: 600,
+          completion: 250,
+          toolDefinitions: 150,
+          total: 1000,
+        },
+        inducedError: {
+          injected: true,
+          recoveredWithinTwoTurns: false,
+          turnsToRecovery: null,
+          finalOutcome: "gave_up",
+        },
+        rawDataPaths: {
+          transcripts: ["artifacts/llm/raw-list-issues.jsonl"],
+        },
+      },
+      {
+        taskId: "create-issue",
+        taskName: "Create issue",
+        configId: "raw_mcp",
+        outcome: "failed",
+        firstCallSuccess: true,
+        turnsToCompletion: null,
+        tokensToCompletion: null,
+        inducedError: {
+          injected: false,
+        },
+      },
+      {
+        taskId: "list-issues",
+        taskName: "List repository issues",
+        configId: "mcpaql_adapted",
+        outcome: "completed",
+        firstCallSuccess: true,
+        turnsToCompletion: 1,
+        tokensToCompletion: {
+          prompt: 180,
+          completion: 120,
+          total: 300,
+        },
+        inducedError: {
+          injected: true,
+          recoveredWithinTwoTurns: true,
+          turnsToRecovery: 1,
+          finalOutcome: "recovered",
+        },
+      },
+      {
+        taskId: "create-issue",
+        taskName: "Create issue",
+        configId: "mcpaql_adapted",
+        outcome: "completed",
+        firstCallSuccess: true,
+        turnsToCompletion: 2,
+        tokensToCompletion: {
+          prompt: 250,
+          completion: 250,
+          total: 500,
+        },
+        inducedError: {
+          injected: false,
+        },
+      },
+    ],
+    notes: "Fixture data validates report behavior only; it is not a benchmark result.",
+  };
+}
 
 test("extractOfficialPayload prefers structured content and parses JSON text", () => {
   assert.deepEqual(
