@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
+import { execFile as execFileCallback } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { promisify } from "node:util";
 import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import Ajv from "ajv";
+import addFormats from "ajv-formats";
 
 import { callMcpaql } from "../src/parity/calls.js";
 import { loadAdapterMetadata } from "../src/parity/metadata.js";
@@ -20,6 +23,7 @@ import {
   extractOfficialPayload,
   firstDiff,
   isExpectedVerifyResult,
+  loadLlmMetricsInput,
   maskVariantTokens,
   normalize,
   renderLlmMetricsMarkdownSummary,
@@ -29,6 +33,8 @@ import {
   writeLlmMetricsReport,
   type LlmMetricsReportInput,
 } from "../src/parity-runner.js";
+
+const execFile = promisify(execFileCallback);
 
 test("resolveAdapterPaths defaults to bundled files beside the adapter server", () => {
   const serverPath = path.join("/tmp", "adapter", "dist", "server.js");
@@ -230,6 +236,7 @@ test("buildLlmMetricsReport aggregates task-level LLM correctness metrics", () =
 test("LLM metrics report schema validates generated reports", () => {
   const report = buildLlmMetricsReport(sampleLlmMetricsInput());
   const ajv = new Ajv({ strict: false });
+  addFormats(ajv);
   const validate = ajv.compile(LLM_METRICS_REPORT_SCHEMA);
 
   assert.equal(validate(report), true, JSON.stringify(validate.errors, null, 2));
@@ -239,8 +246,9 @@ test("renderLlmMetricsMarkdownSummary uses the normalized report data", () => {
   const markdown = renderLlmMetricsMarkdownSummary(buildLlmMetricsReport(sampleLlmMetricsInput()));
 
   assert.match(markdown, /LLM Correctness Metrics: github-mcp/);
-  assert.match(markdown, /Raw MCP/);
+  assert.match(markdown, /Raw MCP \\\| official/);
   assert.match(markdown, /MCPAQL adapted MCP/);
+  assert.match(markdown, /List repository \\\| issues/);
   assert.match(markdown, /50\.0% \(1\/2\)/);
   assert.match(markdown, /recovered within 2 turns/);
   assert.match(markdown, /transcripts: `artifacts\/llm\/raw-list-issues.jsonl`/);
@@ -263,6 +271,54 @@ test("writeLlmMetricsReport and markdown summary create missing directories", as
   assert.match(persistedSummary, /## Summary/);
 });
 
+test("mcpaql-parity supports standalone LLM metrics normalization", async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), "llm-metrics-cli-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const inputPath = path.join(root, "input.json");
+  const reportPath = path.join(root, "out", "llm-metrics.json");
+  const summaryPath = path.join(root, "out", "llm-metrics.md");
+  await writeFile(inputPath, JSON.stringify({
+    ...sampleLlmMetricsInput(),
+    parityReportPath: "stale/parity-report.json",
+  }));
+
+  const { stdout } = await execFile(process.execPath, [
+    "--import",
+    "tsx",
+    "src/parity-cli.ts",
+    "--llm-metrics-input",
+    inputPath,
+    "--llm-metrics-report",
+    reportPath,
+    "--llm-summary",
+    summaryPath,
+  ], { cwd: process.cwd() });
+
+  const report = JSON.parse(await readFile(reportPath, "utf8")) as { parityReportPath: string; aggregates: unknown[] };
+  const summary = await readFile(summaryPath, "utf8");
+  assert.match(stdout, /\[llm-metrics\] report:/);
+  assert.equal(report.parityReportPath, "stale/parity-report.json");
+  assert.equal(report.aggregates.length, 2);
+  assert.match(summary, /LLM Correctness Metrics: github-mcp/);
+});
+
+test("loadLlmMetricsInput rejects unknown task configurations", async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), "llm-metrics-load-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const inputPath = path.join(root, "input.json");
+  await writeFile(inputPath, JSON.stringify({
+    suite: "github-mcp",
+    model: { provider: "anthropic", model: "claude-sonnet-4" },
+    configurations: [{ id: "raw_mcp", label: "Raw MCP" }],
+    taskResults: [{ taskId: "bad-task", configId: "mcpaql_adapted", outcome: "completed" }],
+  }));
+
+  await assert.rejects(
+    () => loadLlmMetricsInput(inputPath),
+    /references unknown LLM metrics configuration "mcpaql_adapted"/,
+  );
+});
+
 test("buildLlmMetricsReport rejects task results with unknown configurations", () => {
   const input = sampleLlmMetricsInput();
   input.taskResults[0] = {
@@ -273,6 +329,16 @@ test("buildLlmMetricsReport rejects task results with unknown configurations", (
   assert.throws(
     () => buildLlmMetricsReport(input),
     /references unknown LLM metrics configuration "unknown"/,
+  );
+});
+
+test("buildLlmMetricsReport rejects duplicate configurations before aggregation", () => {
+  const input = sampleLlmMetricsInput();
+  input.configurations.push({ ...input.configurations[0] });
+
+  assert.throws(
+    () => buildLlmMetricsReport(input),
+    /Duplicate LLM metrics configuration id "raw_mcp"/,
   );
 });
 
@@ -460,7 +526,7 @@ function sampleLlmMetricsInput(): LlmMetricsReportInput {
     configurations: [
       {
         id: "raw_mcp",
-        label: "Raw MCP",
+        label: "Raw MCP | official",
         server: {
           kind: "raw_mcp",
           name: "github-mcp-server",
@@ -485,7 +551,7 @@ function sampleLlmMetricsInput(): LlmMetricsReportInput {
     taskResults: [
       {
         taskId: "list-issues",
-        taskName: "List repository issues",
+        taskName: "List repository | issues",
         configId: "raw_mcp",
         outcome: "completed",
         firstCallSuccess: false,
@@ -512,8 +578,13 @@ function sampleLlmMetricsInput(): LlmMetricsReportInput {
         configId: "raw_mcp",
         outcome: "failed",
         firstCallSuccess: true,
-        turnsToCompletion: null,
-        tokensToCompletion: null,
+        turnsToCompletion: 10,
+        tokensToCompletion: {
+          prompt: 5000,
+          completion: 3000,
+          toolDefinitions: 1999,
+          total: 9999,
+        },
         inducedError: {
           injected: false,
         },

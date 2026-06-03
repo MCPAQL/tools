@@ -125,7 +125,6 @@ export type LlmMetricsReportInput = Omit<LlmMetricsReport, "schemaVersion" | "re
   schemaVersion?: string;
   reportKind?: string;
   generatedAt?: string;
-  aggregates?: LlmMetricAggregate[];
 };
 
 export const LLM_METRICS_REPORT_SCHEMA = {
@@ -140,9 +139,9 @@ export const LLM_METRICS_REPORT_SCHEMA = {
     reportKind: { const: LLM_METRICS_REPORT_KIND },
     suite: { type: "string", minLength: 1 },
     label: { type: "string" },
-    generatedAt: { type: "string", minLength: 1 },
-    startedAt: { type: "string" },
-    finishedAt: { type: "string" },
+    generatedAt: { type: "string", format: "date-time", minLength: 1 },
+    startedAt: { type: "string", format: "date-time" },
+    finishedAt: { type: "string", format: "date-time" },
     model: {
       type: "object",
       required: ["provider", "model"],
@@ -221,8 +220,8 @@ export const LLM_METRICS_REPORT_SCHEMA = {
             ],
           },
           rawDataPaths: { $ref: "#/definitions/rawDataPaths" },
-          startedAt: { type: "string" },
-          finishedAt: { type: "string" },
+          startedAt: { type: "string", format: "date-time" },
+          finishedAt: { type: "string", format: "date-time" },
           notes: { type: "string" },
         },
       },
@@ -300,6 +299,7 @@ export const LLM_METRICS_REPORT_SCHEMA = {
   },
 } as const;
 
+/** Builds a normalized report and always recomputes aggregates from taskResults. */
 export function buildLlmMetricsReport(input: LlmMetricsReportInput): LlmMetricsReport {
   validateTaskConfigurations(input.configurations, input.taskResults);
 
@@ -319,14 +319,16 @@ export function computeLlmMetricAggregates(
 ): LlmMetricAggregate[] {
   return configurations.map((configuration) => {
     const tasks = taskResults.filter((task) => task.configId === configuration.id);
-    const completedTaskCount = tasks.filter((task) => task.outcome === "completed").length;
+    const completedTasks = tasks.filter((task) => task.outcome === "completed");
+    const completedTaskCount = completedTasks.length;
+    // First-call success measures the model's initial tool choice, so it remains outcome-independent even if the task later fails.
     const firstCallResults = tasks
       .map((task) => task.firstCallSuccess)
       .filter((value): value is boolean => typeof value === "boolean");
-    const turnResults = tasks
+    const turnResults = completedTasks
       .map((task) => task.turnsToCompletion)
       .filter(isFiniteNumber);
-    const tokenResults = tasks
+    const tokenResults = completedTasks
       .map((task) => task.tokensToCompletion?.total)
       .filter(isFiniteNumber);
     const injectedErrorTasks = tasks.filter((task) => task.inducedError?.injected === true);
@@ -355,8 +357,15 @@ export function computeLlmMetricAggregates(
   });
 }
 
+/**
+ * Loads captured LLM metrics input JSON and performs lightweight structural checks.
+ * Full machine-readable output validation remains available by validating the
+ * normalized buildLlmMetricsReport(...) result against LLM_METRICS_REPORT_SCHEMA.
+ */
 export async function loadLlmMetricsInput(inputPath: string): Promise<LlmMetricsReportInput> {
-  return JSON.parse(await readFile(inputPath, "utf8")) as LlmMetricsReportInput;
+  const input = JSON.parse(await readFile(inputPath, "utf8")) as unknown;
+  validateLlmMetricsInput(input, inputPath);
+  return input;
 }
 
 export async function writeLlmMetricsReport(
@@ -393,7 +402,7 @@ export function renderLlmMetricsMarkdownSummary(report: LlmMetricsReport): strin
   lines.push("| --- | ---: | ---: | ---: | ---: | ---: | ---: |");
   for (const aggregate of report.aggregates) {
     const configuration = report.configurations.find((entry) => entry.id === aggregate.configId);
-    lines.push([
+    lines.push(markdownTableRow([
       configuration?.label ?? aggregate.configId,
       String(aggregate.taskCount),
       String(aggregate.completedTaskCount),
@@ -405,7 +414,7 @@ export function renderLlmMetricsMarkdownSummary(report: LlmMetricsReport): strin
         aggregate.inducedErrorRecovery.recoveredWithinTwoTurnsCount,
         aggregate.inducedErrorRecovery.measuredCount,
       ),
-    ].join(" | ").replace(/^/, "| ").replace(/$/, " |"));
+    ]));
   }
 
   lines.push("");
@@ -418,7 +427,7 @@ export function renderLlmMetricsMarkdownSummary(report: LlmMetricsReport): strin
     lines.push("| --- | --- | --- | ---: | ---: | ---: | --- | --- |");
     for (const task of report.taskResults) {
       const configuration = report.configurations.find((entry) => entry.id === task.configId);
-      lines.push([
+      lines.push(markdownTableRow([
         task.taskName ?? task.taskId,
         configuration?.label ?? task.configId,
         task.outcome,
@@ -427,7 +436,7 @@ export function renderLlmMetricsMarkdownSummary(report: LlmMetricsReport): strin
         formatNullableNumber(task.tokensToCompletion?.total),
         formatRecovery(task.inducedError),
         formatRawDataPaths(task.rawDataPaths),
-      ].join(" | ").replace(/^/, "| ").replace(/$/, " |"));
+      ]));
     }
   }
 
@@ -454,7 +463,13 @@ function validateTaskConfigurations(
   configurations: LlmMetricConfiguration[],
   taskResults: LlmTaskResult[],
 ): void {
-  const configIds = new Set(configurations.map((configuration) => configuration.id));
+  const configIds = new Set<LlmMetricConfigId>();
+  for (const configuration of configurations) {
+    if (configIds.has(configuration.id)) {
+      throw new Error(`Duplicate LLM metrics configuration id "${configuration.id}".`);
+    }
+    configIds.add(configuration.id);
+  }
   for (const task of taskResults) {
     if (!configIds.has(task.configId)) {
       throw new Error(`Task "${task.taskId}" references unknown LLM metrics configuration "${task.configId}".`);
@@ -471,10 +486,10 @@ function buildCountRate(successCount: number, measuredCount: number): CountRateM
 }
 
 function buildAverage(values: number[]): AverageMetric {
-  const total = roundMetric(values.reduce((sum, value) => sum + value, 0));
+  const total = values.reduce((sum, value) => sum + value, 0);
   return {
     measuredCount: values.length,
-    total,
+    total: roundMetric(total),
     average: values.length === 0 ? null : roundMetric(total / values.length),
   };
 }
@@ -504,7 +519,9 @@ function formatRate(value: number | null, numerator: number, denominator: number
 }
 
 function formatNullableNumber(value: number | null | undefined): string {
-  return typeof value === "number" && Number.isFinite(value) ? String(value) : "n/a";
+  if (typeof value !== "number" || !Number.isFinite(value)) return "n/a";
+  if (Number.isInteger(value)) return String(value);
+  return value.toFixed(2).replace(/0+$/, "").replace(/\.$/, "");
 }
 
 function formatBoolean(value: boolean | null | undefined): string {
@@ -525,4 +542,56 @@ function formatRawDataPaths(paths: LlmRawDataPaths | undefined): string {
   const entries = (Object.entries(paths) as Array<[string, string[] | undefined]>)
     .flatMap(([kind, values]) => (values ?? []).map((value) => `${kind}: \`${value}\``));
   return entries.length === 0 ? "n/a" : entries.join("<br>");
+}
+
+function markdownTableRow(cells: string[]): string {
+  return `| ${cells.map(escapeMarkdownTableCell).join(" | ")} |`;
+}
+
+function escapeMarkdownTableCell(value: string): string {
+  return value
+    .replace(/\\/g, "\\\\")
+    .replace(/\|/g, "\\|")
+    .replace(/\r?\n/g, " ");
+}
+
+function validateLlmMetricsInput(value: unknown, inputPath: string): asserts value is LlmMetricsReportInput {
+  if (!isRecord(value)) {
+    throw new Error(`LLM metrics input ${inputPath} must be a JSON object.`);
+  }
+  if (typeof value.suite !== "string" || value.suite.length === 0) {
+    throw new Error(`LLM metrics input ${inputPath} must include a non-empty suite.`);
+  }
+  if (!isRecord(value.model)) {
+    throw new Error(`LLM metrics input ${inputPath} must include model metadata.`);
+  }
+  if (!Array.isArray(value.configurations)) {
+    throw new Error(`LLM metrics input ${inputPath} must include configurations.`);
+  }
+  if (!Array.isArray(value.taskResults)) {
+    throw new Error(`LLM metrics input ${inputPath} must include taskResults.`);
+  }
+
+  const configurations = value.configurations.map((configuration, index) => {
+    if (!isRecord(configuration) || !isLlmMetricConfigId(configuration.id)) {
+      throw new Error(`LLM metrics input ${inputPath} has invalid configuration at index ${index}.`);
+    }
+    return configuration as unknown as LlmMetricConfiguration;
+  });
+  const taskResults = value.taskResults.map((task, index) => {
+    if (!isRecord(task) || typeof task.taskId !== "string" || !isLlmMetricConfigId(task.configId)) {
+      throw new Error(`LLM metrics input ${inputPath} has invalid taskResult at index ${index}.`);
+    }
+    return task as unknown as LlmTaskResult;
+  });
+
+  validateTaskConfigurations(configurations, taskResults);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isLlmMetricConfigId(value: unknown): value is LlmMetricConfigId {
+  return typeof value === "string" && (LLM_METRIC_CONFIG_IDS as readonly string[]).includes(value);
 }

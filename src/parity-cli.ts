@@ -138,7 +138,7 @@ async function writeLlmMetricsArtifacts(options: {
   const input = await loadLlmMetricsInput(options.inputPath);
   const reportInput = {
     ...input,
-    parityReportPath: input.parityReportPath ?? options.parityReportPath,
+    parityReportPath: options.parityReportPath ?? input.parityReportPath,
   };
   const report = options.reportPath
     ? await writeLlmMetricsReport(options.reportPath, reportInput)
