@@ -1,0 +1,62 @@
+{
+  "suite": "github-mcp",
+  "label": "github-mcp-llm-benchmark-template",
+  "generatedAt": "2026-06-27T00:00:00.000Z",
+  "model": {
+    "provider": "anthropic",
+    "model": "TO_BE_RECORDED_BEFORE_LIVE_RUN",
+    "version": "TO_BE_RECORDED_BEFORE_LIVE_RUN",
+    "temperature": 0,
+    "extra": {
+      "promptPolicy": "Use the same system/developer prompt prefix for raw_mcp and mcpaql_adapted."
+    }
+  },
+  "configurations": [
+    {
+      "id": "raw_mcp",
+      "label": "Raw GitHub MCP",
+      "description": "Raw GitHub MCP tool list exposed directly to the model.",
+      "server": {
+        "kind": "raw_mcp",
+        "name": "github-mcp",
+        "toolDefinitionsPath": "artifacts/github-llm-benchmark/raw-mcp/tool-definitions.json"
+      }
+    },
+    {
+      "id": "mcpaql_adapted",
+      "label": "MCPAQL-adapted GitHub MCP",
+      "description": "MCPAQL adapter endpoint tools over the GitHub MCP operation surface.",
+      "server": {
+        "kind": "mcpaql_adapter",
+        "adapterPath": "${MCPAQL_GITHUB_ADAPTER_SERVER}",
+        "schemaPath": "${MCPAQL_GITHUB_ADAPTER_SCHEMA}",
+        "provenancePath": "${MCPAQL_GITHUB_ADAPTER_PROVENANCE}",
+        "toolDefinitionsPath": "artifacts/github-llm-benchmark/mcpaql-adapted/tool-definitions.json"
+      }
+    }
+  ],
+  "rawDataPaths": {
+    "transcripts": [
+      "artifacts/github-llm-benchmark/raw-mcp/transcripts",
+      "artifacts/github-llm-benchmark/mcpaql-adapted/transcripts"
+    ],
+    "logs": [
+      "artifacts/github-llm-benchmark/raw-mcp/logs",
+      "artifacts/github-llm-benchmark/mcpaql-adapted/logs"
+    ],
+    "prompts": [
+      "artifacts/github-llm-benchmark/raw-mcp/prompts",
+      "artifacts/github-llm-benchmark/mcpaql-adapted/prompts"
+    ],
+    "toolDefinitions": [
+      "artifacts/github-llm-benchmark/raw-mcp/tool-definitions.json",
+      "artifacts/github-llm-benchmark/mcpaql-adapted/tool-definitions.json"
+    ],
+    "fixtures": [
+      "fixtures/github-llm-benchmark-tasks.json",
+      "artifacts/github-llm-benchmark/fixtures/setup.json"
+    ]
+  },
+  "taskResults": [],
+  "notes": "Template only. Empty taskResults mean this file contains no benchmark evidence."
+}
