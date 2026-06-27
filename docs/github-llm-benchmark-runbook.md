@@ -53,6 +53,7 @@ Use `fixtures/github-llm-benchmark-tasks.json` as the canonical task list for th
 - `taskType`
 - `prompt`
 - `expectedFirstTool.rawMcp`
+- `expectedRawMethod`
 - `expectedFirstTool.mcpaqlAdapted`
 - `requiresFixture`
 - `mutation`
@@ -100,13 +101,22 @@ Transcript files should be JSONL, one event per line, and include at minimum:
 
 Do not commit raw transcripts or generated reports until the coordinator confirms they are safe to publish.
 
+## Raw Tool Mapping Pinning
+
+The task manifest pins first-call scoring to the current grouped GitHub MCP raw tool surface. For raw MCP, score the first call by matching both:
+
+- `expectedFirstTool.rawMcp`: the grouped raw tool name, such as `issue_read`
+- `expectedRawMethod`: the method/action argument inside that raw tool call, such as `get`
+
+Before running the benchmark, capture `artifacts/github-llm-benchmark/raw-mcp/tool-definitions.json` from the live raw GitHub MCP server and verify every manifest entry has an exact raw tool + method match. If any entry does not match, stop and update the manifest or add an explicit mapping file before collecting results. Do not score live transcripts against stale flattened names such as `get_issue` or `create_issue`.
+
 ## Scoring Policy
 
 Use `src/parity/llm-metrics.ts` as the report schema.
 
 Per task/config/run:
 
-- `firstCallSuccess`: true when the model's first tool call matches `expectedFirstTool` for that configuration.
+- `firstCallSuccess`: true when the model's first tool call matches `expectedFirstTool` for that configuration. For raw MCP, also require the call's method/action argument to match `expectedRawMethod`. For MCPAQL-adapted MCP, require the endpoint tool to match `expectedFirstTool.mcpaqlAdapted` and the requested operation to match `expectedOperation`.
 - `outcome`: `completed` only when the task reached the specified end state in the disposable repository. Use `failed`, `gave_up`, or `error` otherwise.
 - `turnsToCompletion`: count model/tool cycles until completion. Leave null for non-completed runs unless a failure turn count is needed for debugging.
 - `tokensToCompletion`: cumulative prompt + completion + tool-definition tokens for completed runs.
