@@ -760,7 +760,7 @@
       "taskType": "user_read",
       "prompt": "Identify the authenticated GitHub user and report the login.",
       "expectedFirstTool": {
-        "rawMcp": "user_read",
+        "rawMcp": "get_me",
         "mcpaqlAdapted": "mcp_aql_read"
       },
       "expectedOperation": "get_me",
@@ -769,7 +769,7 @@
       "inducedError": {
         "enabled": false
       },
-      "expectedRawMethod": "get_authenticated"
+      "expectedRawMethod": null
     },
     {
       "id": "error-issue-create-missing-title",
