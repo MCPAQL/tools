@@ -30,6 +30,7 @@ Set these before running a live benchmark:
 - `MCPAQL_GITHUB_ADAPTER_SCHEMA`: path to the adapter `schema.json`.
 - `MCPAQL_GITHUB_ADAPTER_PROVENANCE`: path to the adapter `provenance.json`.
 - `RAW_GITHUB_MCP_COMMAND`: command used to launch the raw GitHub MCP server.
+- `GITHUB_TOOLSETS`: toolsets used for both the raw GitHub MCP command and adapter generation. Use `default,actions,labels` or `all`; the manifest requires Actions and label tools that are not in the stock default set.
 
 The coordinator should confirm the exact Claude model string before the run. Record it in `artifacts/github-llm-benchmark/metrics-input.json` under `model.model` and `model.version`.
 
@@ -41,6 +42,7 @@ Use a private or throwaway repository. The live run should create fixtures only 
 - At least one repository collaborator visible to the benchmark token
 - Issues for read/update/comment/close/reopen flows
 - A branch and pull request for PR-review flows
+- A pending pull request review for the review-comment and review-submit flows
 - At least one discussion or project task only if those operations are confirmed available in the adapter schema
 
 Do not run against MCPAQL production repositories.
@@ -63,7 +65,7 @@ Run each task at least 10 times for each configuration.
 
 The manifest also declares `fixtureIsolation.policy: fresh_per_task_config_run`. Treat that as mandatory: every task/configuration/run tuple must receive a fresh fixture allocation or a reset to its pre-run state before the model starts.
 
-For mutation tasks, never reuse a target that may have been closed, deleted, merged, relabeled, assigned, or otherwise changed by an earlier repeat. Create per-run fixture IDs such as `${TASK_ID}-${CONFIG_ID}-${RUN_INDEX}`, record them in `artifacts/github-llm-benchmark/fixtures/setup.json`, and tear them down after report generation. If fixture reset fails, mark that run `error` and do not continue collecting results against dirty state.
+For mutation tasks, never reuse a target that may have been closed, deleted, merged, relabeled, assigned, submitted as a pending review, or otherwise changed by an earlier repeat. Create per-run fixture IDs such as `${TASK_ID}-${CONFIG_ID}-${RUN_INDEX}`, record them in `artifacts/github-llm-benchmark/fixtures/setup.json`, and tear them down after report generation. If fixture reset fails, mark that run `error` and do not continue collecting results against dirty state.
 
 ## Raw Data Layout
 
@@ -114,7 +116,7 @@ The task manifest pins first-call scoring to the current GitHub MCP raw tool sur
 
 Before running the benchmark, capture `artifacts/github-llm-benchmark/raw-mcp/tool-definitions.json` from the live raw GitHub MCP server and verify every manifest entry has an exact raw tool match and, when `expectedRawMethod` is non-null, an exact method match. If any entry does not match, stop and update the manifest or add an explicit mapping file before collecting results. The canonical manifest intentionally pins issue creation to the current standalone raw `create_issue` tool. Do not score live transcripts against stale flattened names such as `get_issue`; if a future raw server exposes issue creation only through grouped `issue_write`, stop and update the manifest before collecting results.
 
-For grouped raw tools that fan out by method, keep the raw method and adapted operation preflights separate. For example, the workflow tasks currently pin raw `actions_list` with `expectedRawMethod` values `list_workflows` and `list_workflow_runs`, while the adapted side remains pinned to the generated operation `actions_list`. If the generated adapter schema exposes split workflow operations instead, stop and update `expectedOperation` or add an explicit mapping before collecting results.
+For grouped raw tools that fan out by method, keep the raw method and adapted operation preflights separate. For example, the workflow tasks currently pin raw `actions_list` with `expectedRawMethod` values `list_workflows` and `list_workflow_runs`, while the adapted side remains pinned to the generated execute operation `actions_list`. If the generated adapter schema exposes split workflow operations instead, stop and update `expectedOperation` or add an explicit mapping before collecting results.
 
 ## Scoring Policy
 

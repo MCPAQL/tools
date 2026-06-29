@@ -690,7 +690,7 @@
       "prompt": "List GitHub Actions workflows for ${GITHUB_BENCHMARK_OWNER}/${GITHUB_BENCHMARK_REPO}.",
       "expectedFirstTool": {
         "rawMcp": "actions_list",
-        "mcpaqlAdapted": "mcp_aql_read"
+        "mcpaqlAdapted": "mcp_aql_execute"
       },
       "expectedOperation": "actions_list",
       "requiresFixture": [
@@ -708,7 +708,7 @@
       "prompt": "List recent workflow runs for ${GITHUB_BENCHMARK_OWNER}/${GITHUB_BENCHMARK_REPO}.",
       "expectedFirstTool": {
         "rawMcp": "actions_list",
-        "mcpaqlAdapted": "mcp_aql_read"
+        "mcpaqlAdapted": "mcp_aql_execute"
       },
       "expectedOperation": "actions_list",
       "requiresFixture": [
@@ -937,6 +937,6 @@
   ],
   "fixtureIsolation": {
     "policy": "fresh_per_task_config_run",
-    "description": "Allocate or reset mutable fixtures for every task/configuration/run tuple before scoring. Repeated mutation runs must not share close/delete/merge/label-removal targets."
+    "description": "Allocate or reset mutable fixtures for every task/configuration/run tuple before scoring. Repeated mutation runs must not share close/delete/merge/label-removal targets or pending-review state that may have been submitted."
   }
 }

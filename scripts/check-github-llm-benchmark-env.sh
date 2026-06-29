@@ -12,6 +12,7 @@ required_vars=(
   MCPAQL_GITHUB_ADAPTER_SCHEMA
   MCPAQL_GITHUB_ADAPTER_PROVENANCE
   RAW_GITHUB_MCP_COMMAND
+  GITHUB_TOOLSETS
 )
 
 missing=0
@@ -32,6 +33,16 @@ for path_var in MCPAQL_GITHUB_ADAPTER_SERVER MCPAQL_GITHUB_ADAPTER_SCHEMA MCPAQL
     missing=1
   fi
 done
+
+toolsets="${GITHUB_TOOLSETS:-}"
+if [[ -n "$toolsets" && "$toolsets" != "all" ]]; then
+  for required_toolset in default actions labels; do
+    if [[ ",$toolsets," != *",$required_toolset,"* ]]; then
+      printf 'GITHUB_TOOLSETS_missing=%s\n' "$required_toolset"
+      missing=1
+    fi
+  done
+fi
 
 if [[ "$missing" -ne 0 ]]; then
   printf 'github-llm-benchmark-env=not-ready\n'
