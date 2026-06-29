@@ -380,14 +380,14 @@
     {
       "id": "pull-add-review-comment",
       "taskType": "pull_request_update",
-      "prompt": "Add a review comment to pull request ${FIXTURE_PULL_NUMBER} on ${FIXTURE_CHANGED_FILE}.",
+      "prompt": "Add a review comment to the pending review for pull request ${FIXTURE_PULL_NUMBER} on ${FIXTURE_CHANGED_FILE}.",
       "expectedFirstTool": {
-        "rawMcp": "add_pull_request_review_comment",
+        "rawMcp": "add_comment_to_pending_review",
         "mcpaqlAdapted": "mcp_aql_create"
       },
-      "expectedOperation": "add_pull_request_review_comment",
+      "expectedOperation": "add_comment_to_pending_review",
       "requiresFixture": [
-        "pull_request",
+        "pending_review",
         "changed_file"
       ],
       "mutation": true,
@@ -399,20 +399,20 @@
     {
       "id": "pull-submit-review",
       "taskType": "pull_request_update",
-      "prompt": "Submit a comment-only review on pull request ${FIXTURE_PULL_NUMBER}.",
+      "prompt": "Submit the pending comment-only review on pull request ${FIXTURE_PULL_NUMBER}.",
       "expectedFirstTool": {
-        "rawMcp": "create_pull_request_review",
-        "mcpaqlAdapted": "mcp_aql_create"
+        "rawMcp": "pull_request_review_write",
+        "mcpaqlAdapted": "mcp_aql_update"
       },
-      "expectedOperation": "create_pull_request_review",
+      "expectedOperation": "pull_request_review_write",
       "requiresFixture": [
-        "pull_request"
+        "pending_review"
       ],
       "mutation": true,
       "inducedError": {
         "enabled": false
       },
-      "expectedRawMethod": null
+      "expectedRawMethod": "submit_pending"
     },
     {
       "id": "pull-merge",
