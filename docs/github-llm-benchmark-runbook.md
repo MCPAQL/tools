@@ -90,6 +90,8 @@ artifacts/github-llm-benchmark/
   metrics-input.json
   llm-metrics.json
   llm-metrics.md
+  task-type-aggregates.json
+  task-type-aggregates.md
   methodology.md
 ```
 
@@ -134,6 +136,8 @@ Per task/config/run:
 
 The aggregate report intentionally computes turn/token averages over completed tasks only.
 
+Before publishing final results, join the normalized `llm-metrics.json` task results against `fixtures/github-llm-benchmark-tasks.json` and generate task-type aggregate artifacts. `llm-metrics.json` remains the canonical per-configuration metrics schema, while `task-type-aggregates.json` and `task-type-aggregates.md` provide the required first-call success rate by task type.
+
 ## Commands
 
 Install and build:
@@ -170,6 +174,16 @@ npm run parity -- \
   --llm-summary artifacts/github-llm-benchmark/llm-metrics.md
 ```
 
+Then generate the required task-type aggregate report:
+
+```bash
+node scripts/summarize-github-llm-task-types.mjs \
+  fixtures/github-llm-benchmark-tasks.json \
+  artifacts/github-llm-benchmark/llm-metrics.json \
+  artifacts/github-llm-benchmark/task-type-aggregates.json \
+  artifacts/github-llm-benchmark/task-type-aggregates.md
+```
+
 ## Current Blocker
 
 As of this preparation pass, the local environment did not expose `ANTHROPIC_API_KEY`, `GITHUB_PERSONAL_ACCESS_TOKEN`, `GITHUB_TOKEN`, or `GH_TOKEN`. GitHub CLI auth was present, but the benchmark runner needs an explicit model API key and an explicit disposable-repo token environment variable.
@@ -187,10 +201,11 @@ MCPAQL_GITHUB_ADAPTER_SERVER=... \
 MCPAQL_GITHUB_ADAPTER_SCHEMA=... \
 MCPAQL_GITHUB_ADAPTER_PROVENANCE=... \
 RAW_GITHUB_MCP_COMMAND=... \
+GITHUB_TOOLSETS=default,actions,labels,git \
 npm run parity -- \
   --llm-metrics-input artifacts/github-llm-benchmark/metrics-input.json \
   --llm-metrics-report artifacts/github-llm-benchmark/llm-metrics.json \
   --llm-summary artifacts/github-llm-benchmark/llm-metrics.md
 ```
 
-Replace the final `npm run parity` normalization step with the live runner command once the live runner exists. Keep this normalization command as the final report-generation step.
+Replace the final `npm run parity` normalization step with the live runner command once the live runner exists. Keep the normalization and task-type aggregate commands as the final report-generation steps.

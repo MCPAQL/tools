@@ -358,10 +358,10 @@
       "taskType": "pull_request_update",
       "prompt": "Request review from ${GITHUB_BENCHMARK_REVIEWER} on pull request ${FIXTURE_PULL_NUMBER}.",
       "expectedFirstTool": {
-        "rawMcp": "request_pull_request_reviewers",
-        "mcpaqlAdapted": "mcp_aql_execute"
+        "rawMcp": "update_pull_request",
+        "mcpaqlAdapted": "mcp_aql_update"
       },
-      "expectedOperation": "request_pull_request_reviewers",
+      "expectedOperation": "update_pull_request",
       "requiresFixture": [
         "pull_request",
         "reviewer"
@@ -834,10 +834,10 @@
       "taskType": "recovery_pull_request_update",
       "prompt": "Request review from ${GITHUB_BENCHMARK_REVIEWER} on pull request ${FIXTURE_PULL_NUMBER}.",
       "expectedFirstTool": {
-        "rawMcp": "request_pull_request_reviewers",
-        "mcpaqlAdapted": "mcp_aql_execute"
+        "rawMcp": "update_pull_request",
+        "mcpaqlAdapted": "mcp_aql_update"
       },
-      "expectedOperation": "request_pull_request_reviewers",
+      "expectedOperation": "update_pull_request",
       "requiresFixture": [
         "pull_request",
         "reviewer"
