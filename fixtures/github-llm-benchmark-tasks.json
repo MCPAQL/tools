@@ -631,7 +631,7 @@
       "expectedRawMethod": null
     },
     {
-      "id": "milestones-list",
+      "id": "collaborators-list",
       "taskType": "metadata_read",
       "prompt": "List collaborators in ${GITHUB_BENCHMARK_OWNER}/${GITHUB_BENCHMARK_REPO}.",
       "expectedFirstTool": {
@@ -640,7 +640,7 @@
       },
       "expectedOperation": "list_repository_collaborators",
       "requiresFixture": [
-        "milestone"
+        "collaborator"
       ],
       "mutation": false,
       "inducedError": {

@@ -38,7 +38,7 @@ The coordinator should confirm the exact Claude model string before the run. Rec
 Use a private or throwaway repository. The live run should create fixtures only inside that repository:
 
 - Labels: `benchmark`, `bug`, `documentation`, `needs-review`
-- Milestone: `benchmark-milestone`
+- At least one repository collaborator visible to the benchmark token
 - Issues for read/update/comment/close/reopen flows
 - A branch and pull request for PR-review flows
 - At least one discussion or project task only if those operations are confirmed available in the adapter schema
@@ -112,7 +112,9 @@ The task manifest pins first-call scoring to the current GitHub MCP raw tool sur
 - `expectedFirstTool.rawMcp`: the raw tool name, such as `issue_read` or `get_me`
 - `expectedRawMethod`: the method/action argument inside grouped raw tool calls, such as `get`, or null for standalone raw tools
 
-Before running the benchmark, capture `artifacts/github-llm-benchmark/raw-mcp/tool-definitions.json` from the live raw GitHub MCP server and verify every manifest entry has an exact raw tool match and, when `expectedRawMethod` is non-null, an exact method match. If any entry does not match, stop and update the manifest or add an explicit mapping file before collecting results. Do not score live transcripts against stale flattened names such as `get_issue` or `create_issue`.
+Before running the benchmark, capture `artifacts/github-llm-benchmark/raw-mcp/tool-definitions.json` from the live raw GitHub MCP server and verify every manifest entry has an exact raw tool match and, when `expectedRawMethod` is non-null, an exact method match. If any entry does not match, stop and update the manifest or add an explicit mapping file before collecting results. The canonical manifest intentionally pins issue creation to the current standalone raw `create_issue` tool. Do not score live transcripts against stale flattened names such as `get_issue`; if a future raw server exposes issue creation only through grouped `issue_write`, stop and update the manifest before collecting results.
+
+For grouped raw tools that fan out by method, keep the raw method and adapted operation preflights separate. For example, the workflow tasks currently pin raw `actions_list` with `expectedRawMethod` values `list_workflows` and `list_workflow_runs`, while the adapted side remains pinned to the generated operation `actions_list`. If the generated adapter schema exposes split workflow operations instead, stop and update `expectedOperation` or add an explicit mapping before collecting results.
 
 ## Scoring Policy
 
