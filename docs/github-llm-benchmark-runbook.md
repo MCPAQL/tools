@@ -57,6 +57,7 @@ Use `fixtures/github-llm-benchmark-tasks.json` as the canonical task list for th
 - `expectedFirstTool.rawMcp`
 - `expectedRawMethod` (null for standalone raw tools)
 - `expectedFirstTool.mcpaqlAdapted`
+- `expectedAdaptedMethod` when a grouped MCPAQL-adapted operation needs a method/action pin
 - `requiresFixture`
 - `mutation`
 - `inducedError`
@@ -116,7 +117,7 @@ The task manifest pins first-call scoring to the current GitHub MCP raw tool sur
 
 Before running the benchmark, capture `artifacts/github-llm-benchmark/raw-mcp/tool-definitions.json` from the live raw GitHub MCP server and verify every manifest entry has an exact raw tool match and, when `expectedRawMethod` is non-null, an exact method match. If any entry does not match, stop and update the manifest or add an explicit mapping file before collecting results. The canonical manifest intentionally pins issue creation to the current standalone raw `create_issue` tool. Do not score live transcripts against stale flattened names such as `get_issue`; if a future raw server exposes issue creation only through grouped `issue_write`, stop and update the manifest before collecting results.
 
-For grouped raw tools that fan out by method, keep the raw method and adapted operation preflights separate. For example, the workflow tasks currently pin raw `actions_list` with `expectedRawMethod` values `list_workflows` and `list_workflow_runs`, while the adapted side remains pinned to the generated execute operation `actions_list`. If the generated adapter schema exposes split workflow operations instead, stop and update `expectedOperation` or add an explicit mapping before collecting results.
+For grouped raw tools that fan out by method, keep the raw method and adapted operation preflights separate. For example, the workflow tasks currently pin raw `actions_list` with `expectedRawMethod` values `list_workflows` and `list_workflow_runs`, while the adapted side remains pinned to the generated execute operation `actions_list` with matching `expectedAdaptedMethod` values. If the generated adapter schema exposes split workflow operations instead, stop and update `expectedOperation`/`expectedAdaptedMethod` or add an explicit mapping before collecting results.
 
 ## Scoring Policy
 
@@ -124,7 +125,7 @@ Use `src/parity/llm-metrics.ts` as the report schema.
 
 Per task/config/run:
 
-- `firstCallSuccess`: true when the model's first tool call matches `expectedFirstTool` for that configuration. For raw MCP, also require the call's method/action argument to match `expectedRawMethod` when it is non-null. For MCPAQL-adapted MCP, require the endpoint tool to match `expectedFirstTool.mcpaqlAdapted` and the requested operation to match `expectedOperation`.
+- `firstCallSuccess`: true when the model's first tool call matches `expectedFirstTool` for that configuration. For raw MCP, also require the call's method/action argument to match `expectedRawMethod` when it is non-null. For MCPAQL-adapted MCP, require the endpoint tool to match `expectedFirstTool.mcpaqlAdapted`, the requested operation to match `expectedOperation`, and the adapted call's method/action argument to match `expectedAdaptedMethod` when it is present.
 - `outcome`: `completed` only when the task reached the specified end state in the disposable repository. Use `failed`, `gave_up`, or `error` otherwise.
 - `turnsToCompletion`: count model/tool cycles until completion. Leave null for non-completed runs unless a failure turn count is needed for debugging.
 - `tokensToCompletion`: cumulative prompt + completion + tool-definition tokens for completed runs.
