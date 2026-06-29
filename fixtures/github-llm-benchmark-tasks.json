@@ -302,7 +302,7 @@
       "inducedError": {
         "enabled": false
       },
-      "expectedRawMethod": "list_files"
+      "expectedRawMethod": "get_files"
     },
     {
       "id": "pull-comments",
@@ -320,7 +320,7 @@
       "inducedError": {
         "enabled": false
       },
-      "expectedRawMethod": "list_review_comments"
+      "expectedRawMethod": "get_review_comments"
     },
     {
       "id": "pull-create",
@@ -528,7 +528,7 @@
       "prompt": "Create file benchmark/${RUN_ID}.md with a short benchmark note.",
       "expectedFirstTool": {
         "rawMcp": "create_or_update_file",
-        "mcpaqlAdapted": "mcp_aql_create"
+        "mcpaqlAdapted": "mcp_aql_update"
       },
       "expectedOperation": "create_or_update_file",
       "requiresFixture": [
@@ -700,7 +700,7 @@
       "inducedError": {
         "enabled": false
       },
-      "expectedRawMethod": null
+      "expectedRawMethod": "list_workflows"
     },
     {
       "id": "workflow-runs",
@@ -718,7 +718,7 @@
       "inducedError": {
         "enabled": false
       },
-      "expectedRawMethod": null
+      "expectedRawMethod": "list_workflow_runs"
     },
     {
       "id": "release-list",
