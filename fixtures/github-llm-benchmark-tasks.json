@@ -764,7 +764,7 @@
       },
       "expectedOperation": "get_release_by_tag",
       "requiresFixture": [
-        "tag"
+        "release"
       ],
       "mutation": false,
       "inducedError": {
@@ -922,7 +922,7 @@
       },
       "expectedOperation": "get_release_by_tag",
       "requiresFixture": [
-        "tag"
+        "release"
       ],
       "mutation": false,
       "inducedError": {

@@ -43,6 +43,7 @@ Use a private or throwaway repository. The live run should create fixtures only 
 - Issues for read/update/comment/close/reopen flows
 - A branch and pull request for PR-review flows
 - A pending pull request review for the review-comment and review-submit flows
+- A GitHub Release for the tag used by release lookup flows; a bare Git tag is not sufficient for `get_release_by_tag`
 - At least one discussion or project task only if those operations are confirmed available in the adapter schema
 
 Do not run against MCPAQL production repositories.
