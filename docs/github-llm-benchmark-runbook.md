@@ -61,6 +61,10 @@ Use `fixtures/github-llm-benchmark-tasks.json` as the canonical task list for th
 
 Run each task at least 10 times for each configuration.
 
+The manifest also declares `fixtureIsolation.policy: fresh_per_task_config_run`. Treat that as mandatory: every task/configuration/run tuple must receive a fresh fixture allocation or a reset to its pre-run state before the model starts.
+
+For mutation tasks, never reuse a target that may have been closed, deleted, merged, relabeled, assigned, or otherwise changed by an earlier repeat. Create per-run fixture IDs such as `${TASK_ID}-${CONFIG_ID}-${RUN_INDEX}`, record them in `artifacts/github-llm-benchmark/fixtures/setup.json`, and tear them down after report generation. If fixture reset fails, mark that run `error` and do not continue collecting results against dirty state.
+
 ## Raw Data Layout
 
 Write all live benchmark artifacts under:
@@ -103,7 +107,7 @@ Do not commit raw transcripts or generated reports until the coordinator confirm
 
 ## Raw Tool Mapping Pinning
 
-The task manifest pins first-call scoring to the current GitHub MCP raw tool surface. Most raw tools are grouped tools with a method/action argument; standalone raw tools such as `get_me` have `expectedRawMethod: null`. For raw MCP, score the first call by matching:
+The task manifest pins first-call scoring to the current GitHub MCP raw tool surface. Standalone raw tools such as `list_issues`, `search_issues`, `get_file_contents`, and `get_me` have `expectedRawMethod: null`; grouped raw tools such as `issue_read` keep a method/action argument. For raw MCP, score the first call by matching:
 
 - `expectedFirstTool.rawMcp`: the raw tool name, such as `issue_read` or `get_me`
 - `expectedRawMethod`: the method/action argument inside grouped raw tool calls, such as `get`, or null for standalone raw tools

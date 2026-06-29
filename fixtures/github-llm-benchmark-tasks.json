@@ -8,7 +8,8 @@
   ],
   "notes": [
     "Prompts target a disposable benchmark repository only.",
-    "expectedFirstTool.rawMcp uses the grouped current GitHub MCP tool surface; expectedRawMethod pins the method/action inside that raw tool call.",
+    "expectedFirstTool.rawMcp uses the current GitHub MCP tool surface. Standalone raw tools use expectedRawMethod: null.",
+    "Standalone raw tools use expectedRawMethod: null; grouped raw tools such as issue_read keep a non-null method/action pin.",
     "Before scoring first-call success, capture raw tool definitions and fail the run if any expectedFirstTool.rawMcp or expectedRawMethod cannot be matched exactly.",
     "expectedFirstTool.mcpaqlAdapted names refer to MCPAQL endpoint tools; the operation name is captured in expectedOperation."
   ],
@@ -18,7 +19,7 @@
       "taskType": "issue_read",
       "prompt": "List the open issues in ${GITHUB_BENCHMARK_OWNER}/${GITHUB_BENCHMARK_REPO} and summarize their titles.",
       "expectedFirstTool": {
-        "rawMcp": "issue_read",
+        "rawMcp": "list_issues",
         "mcpaqlAdapted": "mcp_aql_read"
       },
       "expectedOperation": "list_issues",
@@ -29,14 +30,14 @@
       "inducedError": {
         "enabled": false
       },
-      "expectedRawMethod": "list"
+      "expectedRawMethod": null
     },
     {
       "id": "issue-list-assigned",
       "taskType": "issue_read",
       "prompt": "Find open issues assigned to ${GITHUB_BENCHMARK_ASSIGNEE} in ${GITHUB_BENCHMARK_OWNER}/${GITHUB_BENCHMARK_REPO}.",
       "expectedFirstTool": {
-        "rawMcp": "issue_read",
+        "rawMcp": "list_issues",
         "mcpaqlAdapted": "mcp_aql_read"
       },
       "expectedOperation": "list_issues",
@@ -47,7 +48,7 @@
       "inducedError": {
         "enabled": false
       },
-      "expectedRawMethod": "list"
+      "expectedRawMethod": null
     },
     {
       "id": "issue-get-by-number",
@@ -72,7 +73,7 @@
       "taskType": "issue_read",
       "prompt": "Search for issues labeled benchmark in ${GITHUB_BENCHMARK_OWNER}/${GITHUB_BENCHMARK_REPO}.",
       "expectedFirstTool": {
-        "rawMcp": "issue_read",
+        "rawMcp": "search_issues",
         "mcpaqlAdapted": "mcp_aql_read"
       },
       "expectedOperation": "search_issues",
@@ -83,14 +84,14 @@
       "inducedError": {
         "enabled": false
       },
-      "expectedRawMethod": "search"
+      "expectedRawMethod": null
     },
     {
       "id": "issue-create-basic",
       "taskType": "issue_create",
       "prompt": "Create a new benchmark issue titled 'Benchmark issue ${RUN_ID}' with a short body.",
       "expectedFirstTool": {
-        "rawMcp": "issue_write",
+        "rawMcp": "create_issue",
         "mcpaqlAdapted": "mcp_aql_create"
       },
       "expectedOperation": "create_issue",
@@ -101,14 +102,14 @@
       "inducedError": {
         "enabled": false
       },
-      "expectedRawMethod": "create"
+      "expectedRawMethod": null
     },
     {
       "id": "issue-create-with-labels",
       "taskType": "issue_create",
       "prompt": "Create an issue titled 'Labeled benchmark ${RUN_ID}' and apply labels benchmark and documentation.",
       "expectedFirstTool": {
-        "rawMcp": "issue_write",
+        "rawMcp": "create_issue",
         "mcpaqlAdapted": "mcp_aql_create"
       },
       "expectedOperation": "create_issue",
@@ -119,14 +120,14 @@
       "inducedError": {
         "enabled": false
       },
-      "expectedRawMethod": "create"
+      "expectedRawMethod": null
     },
     {
       "id": "issue-comment",
       "taskType": "issue_update",
       "prompt": "Add a comment to issue ${FIXTURE_ISSUE_NUMBER} saying this is a benchmark comment for ${RUN_ID}.",
       "expectedFirstTool": {
-        "rawMcp": "issue_write",
+        "rawMcp": "add_issue_comment",
         "mcpaqlAdapted": "mcp_aql_create"
       },
       "expectedOperation": "add_issue_comment",
@@ -137,17 +138,17 @@
       "inducedError": {
         "enabled": false
       },
-      "expectedRawMethod": "comment"
+      "expectedRawMethod": null
     },
     {
       "id": "issue-update-title",
       "taskType": "issue_update",
       "prompt": "Update issue ${FIXTURE_ISSUE_NUMBER} so its title ends with '${RUN_ID}'.",
       "expectedFirstTool": {
-        "rawMcp": "issue_write",
+        "rawMcp": "update_issue_title",
         "mcpaqlAdapted": "mcp_aql_update"
       },
-      "expectedOperation": "update_issue",
+      "expectedOperation": "update_issue_title",
       "requiresFixture": [
         "issue"
       ],
@@ -155,17 +156,17 @@
       "inducedError": {
         "enabled": false
       },
-      "expectedRawMethod": "update"
+      "expectedRawMethod": null
     },
     {
       "id": "issue-assign",
       "taskType": "issue_update",
       "prompt": "Assign issue ${FIXTURE_ISSUE_NUMBER} to ${GITHUB_BENCHMARK_ASSIGNEE}.",
       "expectedFirstTool": {
-        "rawMcp": "issue_write",
+        "rawMcp": "update_issue_assignees",
         "mcpaqlAdapted": "mcp_aql_update"
       },
-      "expectedOperation": "add_issue_assignees",
+      "expectedOperation": "update_issue_assignees",
       "requiresFixture": [
         "issue",
         "assignee"
@@ -174,17 +175,17 @@
       "inducedError": {
         "enabled": false
       },
-      "expectedRawMethod": "add_assignees"
+      "expectedRawMethod": null
     },
     {
       "id": "issue-label-add",
       "taskType": "issue_update",
       "prompt": "Add the benchmark label to issue ${FIXTURE_ISSUE_NUMBER}.",
       "expectedFirstTool": {
-        "rawMcp": "issue_write",
+        "rawMcp": "update_issue_labels",
         "mcpaqlAdapted": "mcp_aql_update"
       },
-      "expectedOperation": "add_issue_labels",
+      "expectedOperation": "update_issue_labels",
       "requiresFixture": [
         "issue",
         "label"
@@ -193,17 +194,17 @@
       "inducedError": {
         "enabled": false
       },
-      "expectedRawMethod": "add_labels"
+      "expectedRawMethod": null
     },
     {
       "id": "issue-label-remove",
       "taskType": "issue_update",
       "prompt": "Remove the needs-review label from issue ${FIXTURE_ISSUE_NUMBER}.",
       "expectedFirstTool": {
-        "rawMcp": "issue_write",
+        "rawMcp": "update_issue_labels",
         "mcpaqlAdapted": "mcp_aql_update"
       },
-      "expectedOperation": "remove_issue_label",
+      "expectedOperation": "update_issue_labels",
       "requiresFixture": [
         "labeled_issue"
       ],
@@ -211,17 +212,17 @@
       "inducedError": {
         "enabled": false
       },
-      "expectedRawMethod": "remove_label"
+      "expectedRawMethod": null
     },
     {
       "id": "issue-close",
       "taskType": "issue_update",
       "prompt": "Close issue ${FIXTURE_ISSUE_NUMBER} as completed.",
       "expectedFirstTool": {
-        "rawMcp": "issue_write",
+        "rawMcp": "update_issue_state",
         "mcpaqlAdapted": "mcp_aql_update"
       },
-      "expectedOperation": "update_issue",
+      "expectedOperation": "update_issue_state",
       "requiresFixture": [
         "open_issue"
       ],
@@ -229,17 +230,17 @@
       "inducedError": {
         "enabled": false
       },
-      "expectedRawMethod": "update"
+      "expectedRawMethod": null
     },
     {
       "id": "issue-reopen",
       "taskType": "issue_update",
       "prompt": "Reopen issue ${FIXTURE_CLOSED_ISSUE_NUMBER}.",
       "expectedFirstTool": {
-        "rawMcp": "issue_write",
+        "rawMcp": "update_issue_state",
         "mcpaqlAdapted": "mcp_aql_update"
       },
-      "expectedOperation": "update_issue",
+      "expectedOperation": "update_issue_state",
       "requiresFixture": [
         "closed_issue"
       ],
@@ -247,14 +248,14 @@
       "inducedError": {
         "enabled": false
       },
-      "expectedRawMethod": "update"
+      "expectedRawMethod": null
     },
     {
       "id": "pull-list-open",
       "taskType": "pull_request_read",
       "prompt": "List open pull requests in ${GITHUB_BENCHMARK_OWNER}/${GITHUB_BENCHMARK_REPO}.",
       "expectedFirstTool": {
-        "rawMcp": "pull_request_read",
+        "rawMcp": "list_pull_requests",
         "mcpaqlAdapted": "mcp_aql_read"
       },
       "expectedOperation": "list_pull_requests",
@@ -265,7 +266,7 @@
       "inducedError": {
         "enabled": false
       },
-      "expectedRawMethod": "list"
+      "expectedRawMethod": null
     },
     {
       "id": "pull-get",
@@ -326,7 +327,7 @@
       "taskType": "pull_request_create",
       "prompt": "Open a pull request from ${FIXTURE_BRANCH} into ${FIXTURE_BASE_BRANCH} titled 'Benchmark PR ${RUN_ID}'.",
       "expectedFirstTool": {
-        "rawMcp": "pull_request_write",
+        "rawMcp": "create_pull_request",
         "mcpaqlAdapted": "mcp_aql_create"
       },
       "expectedOperation": "create_pull_request",
@@ -337,14 +338,14 @@
       "inducedError": {
         "enabled": false
       },
-      "expectedRawMethod": "create"
+      "expectedRawMethod": null
     },
     {
       "id": "pull-request-reviewers",
       "taskType": "pull_request_update",
       "prompt": "Request review from ${GITHUB_BENCHMARK_REVIEWER} on pull request ${FIXTURE_PULL_NUMBER}.",
       "expectedFirstTool": {
-        "rawMcp": "pull_request_write",
+        "rawMcp": "request_pull_request_reviewers",
         "mcpaqlAdapted": "mcp_aql_update"
       },
       "expectedOperation": "request_pull_request_reviewers",
@@ -356,14 +357,14 @@
       "inducedError": {
         "enabled": false
       },
-      "expectedRawMethod": "request_reviewers"
+      "expectedRawMethod": null
     },
     {
       "id": "pull-update-branch",
       "taskType": "pull_request_update",
       "prompt": "Update pull request ${FIXTURE_PULL_NUMBER} with the latest base branch changes.",
       "expectedFirstTool": {
-        "rawMcp": "pull_request_write",
+        "rawMcp": "update_pull_request_branch",
         "mcpaqlAdapted": "mcp_aql_update"
       },
       "expectedOperation": "update_pull_request_branch",
@@ -374,14 +375,14 @@
       "inducedError": {
         "enabled": false
       },
-      "expectedRawMethod": "update_branch"
+      "expectedRawMethod": null
     },
     {
       "id": "pull-add-review-comment",
       "taskType": "pull_request_update",
       "prompt": "Add a review comment to pull request ${FIXTURE_PULL_NUMBER} on ${FIXTURE_CHANGED_FILE}.",
       "expectedFirstTool": {
-        "rawMcp": "pull_request_write",
+        "rawMcp": "add_pull_request_review_comment",
         "mcpaqlAdapted": "mcp_aql_create"
       },
       "expectedOperation": "add_pull_request_review_comment",
@@ -393,17 +394,17 @@
       "inducedError": {
         "enabled": false
       },
-      "expectedRawMethod": "add_review_comment"
+      "expectedRawMethod": null
     },
     {
       "id": "pull-submit-review",
       "taskType": "pull_request_update",
       "prompt": "Submit a comment-only review on pull request ${FIXTURE_PULL_NUMBER}.",
       "expectedFirstTool": {
-        "rawMcp": "pull_request_write",
+        "rawMcp": "create_pull_request_review",
         "mcpaqlAdapted": "mcp_aql_create"
       },
-      "expectedOperation": "submit_pull_request_review",
+      "expectedOperation": "create_pull_request_review",
       "requiresFixture": [
         "pull_request"
       ],
@@ -411,14 +412,14 @@
       "inducedError": {
         "enabled": false
       },
-      "expectedRawMethod": "submit_review"
+      "expectedRawMethod": null
     },
     {
       "id": "pull-merge",
       "taskType": "pull_request_update",
       "prompt": "Merge pull request ${FIXTURE_MERGEABLE_PULL_NUMBER} with a squash merge.",
       "expectedFirstTool": {
-        "rawMcp": "pull_request_write",
+        "rawMcp": "merge_pull_request",
         "mcpaqlAdapted": "mcp_aql_update"
       },
       "expectedOperation": "merge_pull_request",
@@ -429,17 +430,17 @@
       "inducedError": {
         "enabled": false
       },
-      "expectedRawMethod": "merge"
+      "expectedRawMethod": null
     },
     {
       "id": "repo-get",
       "taskType": "repository_read",
-      "prompt": "Get repository metadata for ${GITHUB_BENCHMARK_OWNER}/${GITHUB_BENCHMARK_REPO}.",
+      "prompt": "Get the root repository tree for ${GITHUB_BENCHMARK_OWNER}/${GITHUB_BENCHMARK_REPO}.",
       "expectedFirstTool": {
-        "rawMcp": "repository_read",
+        "rawMcp": "get_repository_tree",
         "mcpaqlAdapted": "mcp_aql_read"
       },
-      "expectedOperation": "get_repository",
+      "expectedOperation": "get_repository_tree",
       "requiresFixture": [
         "repository"
       ],
@@ -447,14 +448,14 @@
       "inducedError": {
         "enabled": false
       },
-      "expectedRawMethod": "get"
+      "expectedRawMethod": null
     },
     {
       "id": "repo-branches",
       "taskType": "repository_read",
       "prompt": "List branches in ${GITHUB_BENCHMARK_OWNER}/${GITHUB_BENCHMARK_REPO}.",
       "expectedFirstTool": {
-        "rawMcp": "repository_read",
+        "rawMcp": "list_branches",
         "mcpaqlAdapted": "mcp_aql_read"
       },
       "expectedOperation": "list_branches",
@@ -465,14 +466,14 @@
       "inducedError": {
         "enabled": false
       },
-      "expectedRawMethod": "list_branches"
+      "expectedRawMethod": null
     },
     {
       "id": "repo-tags",
       "taskType": "repository_read",
       "prompt": "List tags in ${GITHUB_BENCHMARK_OWNER}/${GITHUB_BENCHMARK_REPO}.",
       "expectedFirstTool": {
-        "rawMcp": "repository_read",
+        "rawMcp": "list_tags",
         "mcpaqlAdapted": "mcp_aql_read"
       },
       "expectedOperation": "list_tags",
@@ -483,14 +484,14 @@
       "inducedError": {
         "enabled": false
       },
-      "expectedRawMethod": "list_tags"
+      "expectedRawMethod": null
     },
     {
       "id": "repo-commits",
       "taskType": "repository_read",
       "prompt": "List recent commits on ${FIXTURE_BASE_BRANCH}.",
       "expectedFirstTool": {
-        "rawMcp": "repository_read",
+        "rawMcp": "list_commits",
         "mcpaqlAdapted": "mcp_aql_read"
       },
       "expectedOperation": "list_commits",
@@ -501,14 +502,14 @@
       "inducedError": {
         "enabled": false
       },
-      "expectedRawMethod": "list_commits"
+      "expectedRawMethod": null
     },
     {
       "id": "repo-file-read",
       "taskType": "content_read",
       "prompt": "Read ${FIXTURE_README_PATH} from ${GITHUB_BENCHMARK_OWNER}/${GITHUB_BENCHMARK_REPO}.",
       "expectedFirstTool": {
-        "rawMcp": "file_read",
+        "rawMcp": "get_file_contents",
         "mcpaqlAdapted": "mcp_aql_read"
       },
       "expectedOperation": "get_file_contents",
@@ -519,14 +520,14 @@
       "inducedError": {
         "enabled": false
       },
-      "expectedRawMethod": "get_contents"
+      "expectedRawMethod": null
     },
     {
       "id": "repo-file-create",
       "taskType": "content_create",
       "prompt": "Create file benchmark/${RUN_ID}.md with a short benchmark note.",
       "expectedFirstTool": {
-        "rawMcp": "file_write",
+        "rawMcp": "create_or_update_file",
         "mcpaqlAdapted": "mcp_aql_create"
       },
       "expectedOperation": "create_or_update_file",
@@ -537,14 +538,14 @@
       "inducedError": {
         "enabled": false
       },
-      "expectedRawMethod": "create_or_update"
+      "expectedRawMethod": null
     },
     {
       "id": "repo-file-update",
       "taskType": "content_update",
       "prompt": "Update ${FIXTURE_FILE_PATH} by appending a benchmark line for ${RUN_ID}.",
       "expectedFirstTool": {
-        "rawMcp": "file_write",
+        "rawMcp": "create_or_update_file",
         "mcpaqlAdapted": "mcp_aql_update"
       },
       "expectedOperation": "create_or_update_file",
@@ -555,14 +556,14 @@
       "inducedError": {
         "enabled": false
       },
-      "expectedRawMethod": "create_or_update"
+      "expectedRawMethod": null
     },
     {
       "id": "repo-file-delete",
       "taskType": "content_delete",
       "prompt": "Delete ${FIXTURE_DELETE_FILE_PATH} from the repository.",
       "expectedFirstTool": {
-        "rawMcp": "file_write",
+        "rawMcp": "delete_file",
         "mcpaqlAdapted": "mcp_aql_delete"
       },
       "expectedOperation": "delete_file",
@@ -573,14 +574,14 @@
       "inducedError": {
         "enabled": false
       },
-      "expectedRawMethod": "delete"
+      "expectedRawMethod": null
     },
     {
       "id": "search-code",
       "taskType": "search_read",
       "prompt": "Search this repository for files containing the word benchmark.",
       "expectedFirstTool": {
-        "rawMcp": "search_read",
+        "rawMcp": "search_code",
         "mcpaqlAdapted": "mcp_aql_read"
       },
       "expectedOperation": "search_code",
@@ -591,14 +592,14 @@
       "inducedError": {
         "enabled": false
       },
-      "expectedRawMethod": "code"
+      "expectedRawMethod": null
     },
     {
       "id": "search-repositories",
       "taskType": "search_read",
       "prompt": "Search for repositories owned by ${GITHUB_BENCHMARK_OWNER} whose name includes ${GITHUB_BENCHMARK_REPO}.",
       "expectedFirstTool": {
-        "rawMcp": "search_read",
+        "rawMcp": "search_repositories",
         "mcpaqlAdapted": "mcp_aql_read"
       },
       "expectedOperation": "search_repositories",
@@ -609,17 +610,17 @@
       "inducedError": {
         "enabled": false
       },
-      "expectedRawMethod": "repositories"
+      "expectedRawMethod": null
     },
     {
       "id": "labels-list",
       "taskType": "metadata_read",
       "prompt": "List labels in ${GITHUB_BENCHMARK_OWNER}/${GITHUB_BENCHMARK_REPO}.",
       "expectedFirstTool": {
-        "rawMcp": "metadata_read",
+        "rawMcp": "list_label",
         "mcpaqlAdapted": "mcp_aql_read"
       },
-      "expectedOperation": "list_labels",
+      "expectedOperation": "list_label",
       "requiresFixture": [
         "labels"
       ],
@@ -627,17 +628,17 @@
       "inducedError": {
         "enabled": false
       },
-      "expectedRawMethod": "list_labels"
+      "expectedRawMethod": null
     },
     {
       "id": "milestones-list",
       "taskType": "metadata_read",
-      "prompt": "List milestones in ${GITHUB_BENCHMARK_OWNER}/${GITHUB_BENCHMARK_REPO}.",
+      "prompt": "List collaborators in ${GITHUB_BENCHMARK_OWNER}/${GITHUB_BENCHMARK_REPO}.",
       "expectedFirstTool": {
-        "rawMcp": "metadata_read",
+        "rawMcp": "list_repository_collaborators",
         "mcpaqlAdapted": "mcp_aql_read"
       },
-      "expectedOperation": "list_milestones",
+      "expectedOperation": "list_repository_collaborators",
       "requiresFixture": [
         "milestone"
       ],
@@ -645,14 +646,14 @@
       "inducedError": {
         "enabled": false
       },
-      "expectedRawMethod": "list_milestones"
+      "expectedRawMethod": null
     },
     {
       "id": "branch-create",
       "taskType": "git_update",
       "prompt": "Create a branch named benchmark-${RUN_ID} from ${FIXTURE_BASE_BRANCH}.",
       "expectedFirstTool": {
-        "rawMcp": "git_write",
+        "rawMcp": "create_branch",
         "mcpaqlAdapted": "mcp_aql_create"
       },
       "expectedOperation": "create_branch",
@@ -663,14 +664,14 @@
       "inducedError": {
         "enabled": false
       },
-      "expectedRawMethod": "create_branch"
+      "expectedRawMethod": null
     },
     {
       "id": "commit-get",
       "taskType": "git_read",
       "prompt": "Get details for commit ${FIXTURE_COMMIT_SHA}.",
       "expectedFirstTool": {
-        "rawMcp": "git_read",
+        "rawMcp": "get_commit",
         "mcpaqlAdapted": "mcp_aql_read"
       },
       "expectedOperation": "get_commit",
@@ -681,17 +682,17 @@
       "inducedError": {
         "enabled": false
       },
-      "expectedRawMethod": "get_commit"
+      "expectedRawMethod": null
     },
     {
       "id": "workflow-list",
       "taskType": "actions_read",
       "prompt": "List GitHub Actions workflows for ${GITHUB_BENCHMARK_OWNER}/${GITHUB_BENCHMARK_REPO}.",
       "expectedFirstTool": {
-        "rawMcp": "actions_read",
+        "rawMcp": "actions_list",
         "mcpaqlAdapted": "mcp_aql_read"
       },
-      "expectedOperation": "list_workflows",
+      "expectedOperation": "actions_list",
       "requiresFixture": [
         "repository"
       ],
@@ -699,17 +700,17 @@
       "inducedError": {
         "enabled": false
       },
-      "expectedRawMethod": "list_workflows"
+      "expectedRawMethod": null
     },
     {
       "id": "workflow-runs",
       "taskType": "actions_read",
       "prompt": "List recent workflow runs for ${GITHUB_BENCHMARK_OWNER}/${GITHUB_BENCHMARK_REPO}.",
       "expectedFirstTool": {
-        "rawMcp": "actions_read",
+        "rawMcp": "actions_list",
         "mcpaqlAdapted": "mcp_aql_read"
       },
-      "expectedOperation": "list_workflow_runs",
+      "expectedOperation": "actions_list",
       "requiresFixture": [
         "workflow"
       ],
@@ -717,14 +718,14 @@
       "inducedError": {
         "enabled": false
       },
-      "expectedRawMethod": "list_workflow_runs"
+      "expectedRawMethod": null
     },
     {
       "id": "release-list",
       "taskType": "release_read",
       "prompt": "List releases for ${GITHUB_BENCHMARK_OWNER}/${GITHUB_BENCHMARK_REPO}.",
       "expectedFirstTool": {
-        "rawMcp": "release_read",
+        "rawMcp": "list_releases",
         "mcpaqlAdapted": "mcp_aql_read"
       },
       "expectedOperation": "list_releases",
@@ -735,25 +736,25 @@
       "inducedError": {
         "enabled": false
       },
-      "expectedRawMethod": "list"
+      "expectedRawMethod": null
     },
     {
       "id": "release-create-draft",
-      "taskType": "release_create",
-      "prompt": "Create a draft release named Benchmark ${RUN_ID} for tag ${FIXTURE_TAG}.",
+      "taskType": "release_read",
+      "prompt": "Get the release for tag ${FIXTURE_TAG} in ${GITHUB_BENCHMARK_OWNER}/${GITHUB_BENCHMARK_REPO}.",
       "expectedFirstTool": {
-        "rawMcp": "release_write",
+        "rawMcp": "get_release_by_tag",
         "mcpaqlAdapted": "mcp_aql_create"
       },
-      "expectedOperation": "create_release",
+      "expectedOperation": "get_release_by_tag",
       "requiresFixture": [
         "tag"
       ],
-      "mutation": true,
+      "mutation": false,
       "inducedError": {
         "enabled": false
       },
-      "expectedRawMethod": "create"
+      "expectedRawMethod": null
     },
     {
       "id": "user-get-authenticated",
@@ -776,7 +777,7 @@
       "taskType": "recovery_issue_create",
       "prompt": "Create an issue in ${GITHUB_BENCHMARK_OWNER}/${GITHUB_BENCHMARK_REPO} for benchmark recovery ${RUN_ID}.",
       "expectedFirstTool": {
-        "rawMcp": "issue_write",
+        "rawMcp": "create_issue",
         "mcpaqlAdapted": "mcp_aql_create"
       },
       "expectedOperation": "create_issue",
@@ -789,14 +790,14 @@
         "errorCode": "BAD_ARGUMENT",
         "policy": "After the first create_issue call, return an injected missing-title validation error and allow two correction turns."
       },
-      "expectedRawMethod": "create"
+      "expectedRawMethod": null
     },
     {
       "id": "error-issue-comment-wrong-number",
       "taskType": "recovery_issue_update",
       "prompt": "Comment on issue ${FIXTURE_ISSUE_NUMBER} with a benchmark recovery note.",
       "expectedFirstTool": {
-        "rawMcp": "issue_write",
+        "rawMcp": "add_issue_comment",
         "mcpaqlAdapted": "mcp_aql_create"
       },
       "expectedOperation": "add_issue_comment",
@@ -809,14 +810,14 @@
         "errorCode": "NOT_FOUND",
         "policy": "After the first comment call, return an injected issue-not-found error with a wrong issue number and allow two correction turns."
       },
-      "expectedRawMethod": "comment"
+      "expectedRawMethod": null
     },
     {
       "id": "error-pr-reviewer-invalid",
       "taskType": "recovery_pull_request_update",
       "prompt": "Request review from ${GITHUB_BENCHMARK_REVIEWER} on pull request ${FIXTURE_PULL_NUMBER}.",
       "expectedFirstTool": {
-        "rawMcp": "pull_request_write",
+        "rawMcp": "request_pull_request_reviewers",
         "mcpaqlAdapted": "mcp_aql_update"
       },
       "expectedOperation": "request_pull_request_reviewers",
@@ -830,14 +831,14 @@
         "errorCode": "INVALID_REVIEWER",
         "policy": "After the first reviewer request call, return an injected invalid-reviewer error and allow two correction turns."
       },
-      "expectedRawMethod": "request_reviewers"
+      "expectedRawMethod": null
     },
     {
       "id": "error-file-update-stale-sha",
       "taskType": "recovery_content_update",
       "prompt": "Update ${FIXTURE_FILE_PATH} by appending a benchmark recovery line for ${RUN_ID}.",
       "expectedFirstTool": {
-        "rawMcp": "file_write",
+        "rawMcp": "create_or_update_file",
         "mcpaqlAdapted": "mcp_aql_update"
       },
       "expectedOperation": "create_or_update_file",
@@ -850,14 +851,14 @@
         "errorCode": "STALE_SHA",
         "policy": "After the first file update call, return an injected stale-sha error and allow two correction turns."
       },
-      "expectedRawMethod": "create_or_update"
+      "expectedRawMethod": null
     },
     {
       "id": "error-branch-create-existing",
       "taskType": "recovery_git_update",
       "prompt": "Create branch benchmark-${RUN_ID} from ${FIXTURE_BASE_BRANCH}.",
       "expectedFirstTool": {
-        "rawMcp": "git_write",
+        "rawMcp": "create_branch",
         "mcpaqlAdapted": "mcp_aql_create"
       },
       "expectedOperation": "create_branch",
@@ -870,17 +871,17 @@
         "errorCode": "REF_EXISTS",
         "policy": "After the first branch-create call, return an injected branch-already-exists error and allow two correction turns."
       },
-      "expectedRawMethod": "create_branch"
+      "expectedRawMethod": null
     },
     {
       "id": "error-label-add-invalid",
       "taskType": "recovery_issue_update",
       "prompt": "Add the benchmark label to issue ${FIXTURE_ISSUE_NUMBER}.",
       "expectedFirstTool": {
-        "rawMcp": "issue_write",
+        "rawMcp": "update_issue_labels",
         "mcpaqlAdapted": "mcp_aql_update"
       },
-      "expectedOperation": "add_issue_labels",
+      "expectedOperation": "update_issue_labels",
       "requiresFixture": [
         "issue",
         "label"
@@ -891,34 +892,34 @@
         "errorCode": "INVALID_LABEL",
         "policy": "After the first label call, return an injected invalid-label error and allow two correction turns."
       },
-      "expectedRawMethod": "add_labels"
+      "expectedRawMethod": null
     },
     {
       "id": "error-release-existing-tag",
-      "taskType": "recovery_release_create",
-      "prompt": "Create a draft release named Benchmark ${RUN_ID} for tag ${FIXTURE_TAG}.",
+      "taskType": "recovery_release_read",
+      "prompt": "Get the release for tag ${FIXTURE_TAG} in ${GITHUB_BENCHMARK_OWNER}/${GITHUB_BENCHMARK_REPO} after an injected tag lookup error.",
       "expectedFirstTool": {
-        "rawMcp": "release_write",
+        "rawMcp": "get_release_by_tag",
         "mcpaqlAdapted": "mcp_aql_create"
       },
-      "expectedOperation": "create_release",
+      "expectedOperation": "get_release_by_tag",
       "requiresFixture": [
         "tag"
       ],
-      "mutation": true,
+      "mutation": false,
       "inducedError": {
         "enabled": true,
-        "errorCode": "TAG_ALREADY_RELEASED",
-        "policy": "After the first release-create call, return an injected existing-release error and allow two correction turns."
+        "errorCode": "TAG_LOOKUP_FAILED",
+        "policy": "After the first release lookup call, return an injected tag lookup error and allow two correction turns."
       },
-      "expectedRawMethod": "create"
+      "expectedRawMethod": null
     },
     {
       "id": "error-search-malformed-query",
       "taskType": "recovery_search_read",
       "prompt": "Search this repository for issues mentioning benchmark recovery.",
       "expectedFirstTool": {
-        "rawMcp": "issue_read",
+        "rawMcp": "search_issues",
         "mcpaqlAdapted": "mcp_aql_read"
       },
       "expectedOperation": "search_issues",
@@ -931,7 +932,11 @@
         "errorCode": "MALFORMED_QUERY",
         "policy": "After the first search call, return an injected malformed-query error and allow two correction turns."
       },
-      "expectedRawMethod": "search"
+      "expectedRawMethod": null
     }
-  ]
+  ],
+  "fixtureIsolation": {
+    "policy": "fresh_per_task_config_run",
+    "description": "Allocate or reset mutable fixtures for every task/configuration/run tuple before scoring. Repeated mutation runs must not share close/delete/merge/label-removal targets."
+  }
 }
