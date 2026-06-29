@@ -94,9 +94,9 @@
       "prompt": "Create a new benchmark issue titled 'Benchmark issue ${RUN_ID}' with a short body.",
       "expectedFirstTool": {
         "rawMcp": "create_issue",
-        "mcpaqlAdapted": "mcp_aql_create"
+        "mcpaqlAdapted": "mcp_aql_update"
       },
-      "expectedOperation": "create_issue",
+      "expectedOperation": "issue_write",
       "requiresFixture": [
         "repository"
       ],
@@ -104,7 +104,8 @@
       "inducedError": {
         "enabled": false
       },
-      "expectedRawMethod": null
+      "expectedRawMethod": null,
+      "expectedAdaptedMethod": "create"
     },
     {
       "id": "issue-create-with-labels",
@@ -112,9 +113,9 @@
       "prompt": "Create an issue titled 'Labeled benchmark ${RUN_ID}' and apply labels benchmark and documentation.",
       "expectedFirstTool": {
         "rawMcp": "create_issue",
-        "mcpaqlAdapted": "mcp_aql_create"
+        "mcpaqlAdapted": "mcp_aql_update"
       },
-      "expectedOperation": "create_issue",
+      "expectedOperation": "issue_write",
       "requiresFixture": [
         "labels"
       ],
@@ -122,7 +123,8 @@
       "inducedError": {
         "enabled": false
       },
-      "expectedRawMethod": null
+      "expectedRawMethod": null,
+      "expectedAdaptedMethod": "create"
     },
     {
       "id": "issue-comment",
@@ -150,7 +152,7 @@
         "rawMcp": "update_issue_title",
         "mcpaqlAdapted": "mcp_aql_update"
       },
-      "expectedOperation": "update_issue_title",
+      "expectedOperation": "issue_write",
       "requiresFixture": [
         "issue"
       ],
@@ -158,7 +160,8 @@
       "inducedError": {
         "enabled": false
       },
-      "expectedRawMethod": null
+      "expectedRawMethod": null,
+      "expectedAdaptedMethod": "update"
     },
     {
       "id": "issue-assign",
@@ -168,7 +171,7 @@
         "rawMcp": "update_issue_assignees",
         "mcpaqlAdapted": "mcp_aql_update"
       },
-      "expectedOperation": "update_issue_assignees",
+      "expectedOperation": "issue_write",
       "requiresFixture": [
         "issue",
         "assignee"
@@ -177,7 +180,8 @@
       "inducedError": {
         "enabled": false
       },
-      "expectedRawMethod": null
+      "expectedRawMethod": null,
+      "expectedAdaptedMethod": "update"
     },
     {
       "id": "issue-label-add",
@@ -187,7 +191,7 @@
         "rawMcp": "update_issue_labels",
         "mcpaqlAdapted": "mcp_aql_update"
       },
-      "expectedOperation": "update_issue_labels",
+      "expectedOperation": "issue_write",
       "requiresFixture": [
         "issue",
         "label"
@@ -196,7 +200,8 @@
       "inducedError": {
         "enabled": false
       },
-      "expectedRawMethod": null
+      "expectedRawMethod": null,
+      "expectedAdaptedMethod": "update"
     },
     {
       "id": "issue-label-remove",
@@ -206,7 +211,7 @@
         "rawMcp": "update_issue_labels",
         "mcpaqlAdapted": "mcp_aql_update"
       },
-      "expectedOperation": "update_issue_labels",
+      "expectedOperation": "issue_write",
       "requiresFixture": [
         "labeled_issue"
       ],
@@ -214,7 +219,8 @@
       "inducedError": {
         "enabled": false
       },
-      "expectedRawMethod": null
+      "expectedRawMethod": null,
+      "expectedAdaptedMethod": "update"
     },
     {
       "id": "issue-close",
@@ -224,7 +230,7 @@
         "rawMcp": "update_issue_state",
         "mcpaqlAdapted": "mcp_aql_update"
       },
-      "expectedOperation": "update_issue_state",
+      "expectedOperation": "issue_write",
       "requiresFixture": [
         "open_issue"
       ],
@@ -232,7 +238,8 @@
       "inducedError": {
         "enabled": false
       },
-      "expectedRawMethod": null
+      "expectedRawMethod": null,
+      "expectedAdaptedMethod": "update"
     },
     {
       "id": "issue-reopen",
@@ -242,7 +249,7 @@
         "rawMcp": "update_issue_state",
         "mcpaqlAdapted": "mcp_aql_update"
       },
-      "expectedOperation": "update_issue_state",
+      "expectedOperation": "issue_write",
       "requiresFixture": [
         "closed_issue"
       ],
@@ -250,7 +257,8 @@
       "inducedError": {
         "enabled": false
       },
-      "expectedRawMethod": null
+      "expectedRawMethod": null,
+      "expectedAdaptedMethod": "update"
     },
     {
       "id": "pull-list-open",
@@ -786,9 +794,9 @@
       "prompt": "Create an issue in ${GITHUB_BENCHMARK_OWNER}/${GITHUB_BENCHMARK_REPO} for benchmark recovery ${RUN_ID}.",
       "expectedFirstTool": {
         "rawMcp": "create_issue",
-        "mcpaqlAdapted": "mcp_aql_create"
+        "mcpaqlAdapted": "mcp_aql_update"
       },
-      "expectedOperation": "create_issue",
+      "expectedOperation": "issue_write",
       "requiresFixture": [
         "repository"
       ],
@@ -798,7 +806,8 @@
         "errorCode": "BAD_ARGUMENT",
         "policy": "After the first create_issue call, return an injected missing-title validation error and allow two correction turns."
       },
-      "expectedRawMethod": null
+      "expectedRawMethod": null,
+      "expectedAdaptedMethod": "create"
     },
     {
       "id": "error-issue-comment-wrong-number",
@@ -889,7 +898,7 @@
         "rawMcp": "update_issue_labels",
         "mcpaqlAdapted": "mcp_aql_update"
       },
-      "expectedOperation": "update_issue_labels",
+      "expectedOperation": "issue_write",
       "requiresFixture": [
         "issue",
         "label"
@@ -900,7 +909,8 @@
         "errorCode": "INVALID_LABEL",
         "policy": "After the first label call, return an injected invalid-label error and allow two correction turns."
       },
-      "expectedRawMethod": null
+      "expectedRawMethod": null,
+      "expectedAdaptedMethod": "update"
     },
     {
       "id": "error-release-existing-tag",
