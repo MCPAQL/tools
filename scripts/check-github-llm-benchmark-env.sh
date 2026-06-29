@@ -36,7 +36,7 @@ done
 
 toolsets="${GITHUB_TOOLSETS:-}"
 if [[ -n "$toolsets" && "$toolsets" != "all" ]]; then
-  for required_toolset in default actions labels; do
+  for required_toolset in default actions labels git; do
     if [[ ",$toolsets," != *",$required_toolset,"* ]]; then
       printf 'GITHUB_TOOLSETS_missing=%s\n' "$required_toolset"
       missing=1

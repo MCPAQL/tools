@@ -58,7 +58,7 @@
         "rawMcp": "issue_read",
         "mcpaqlAdapted": "mcp_aql_read"
       },
-      "expectedOperation": "get_issue",
+      "expectedOperation": "issue_read",
       "requiresFixture": [
         "issue"
       ],
@@ -276,7 +276,7 @@
         "rawMcp": "pull_request_read",
         "mcpaqlAdapted": "mcp_aql_read"
       },
-      "expectedOperation": "get_pull_request",
+      "expectedOperation": "pull_request_read",
       "requiresFixture": [
         "pull_request"
       ],
@@ -294,7 +294,7 @@
         "rawMcp": "pull_request_read",
         "mcpaqlAdapted": "mcp_aql_read"
       },
-      "expectedOperation": "list_pull_request_files",
+      "expectedOperation": "pull_request_read",
       "requiresFixture": [
         "pull_request"
       ],
@@ -312,7 +312,7 @@
         "rawMcp": "pull_request_read",
         "mcpaqlAdapted": "mcp_aql_read"
       },
-      "expectedOperation": "list_pull_request_review_comments",
+      "expectedOperation": "pull_request_read",
       "requiresFixture": [
         "pull_request_review_comment"
       ],

@@ -30,7 +30,7 @@ Set these before running a live benchmark:
 - `MCPAQL_GITHUB_ADAPTER_SCHEMA`: path to the adapter `schema.json`.
 - `MCPAQL_GITHUB_ADAPTER_PROVENANCE`: path to the adapter `provenance.json`.
 - `RAW_GITHUB_MCP_COMMAND`: command used to launch the raw GitHub MCP server.
-- `GITHUB_TOOLSETS`: toolsets used for both the raw GitHub MCP command and adapter generation. Use `default,actions,labels` or `all`; the manifest requires Actions and label tools that are not in the stock default set.
+- `GITHUB_TOOLSETS`: toolsets used for both the raw GitHub MCP command and adapter generation. Use `default,actions,labels,git` or `all`; the manifest requires Actions, label, and git tools that are not all in the stock default set.
 
 The coordinator should confirm the exact Claude model string before the run. Record it in `artifacts/github-llm-benchmark/metrics-input.json` under `model.model` and `model.version`.
 
