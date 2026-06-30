@@ -19,6 +19,12 @@ const DEFAULT_ARTIFACT_ROOT = "artifacts/github-llm-benchmark";
 const DEFAULT_ANTHROPIC_VERSION = "2023-06-01";
 const DEFAULT_MAX_TURNS = 6;
 const DEFAULT_MAX_TOKENS = 1024;
+const PROMPT_ENV_ALLOWLIST = [
+  "GITHUB_BENCHMARK_OWNER",
+  "GITHUB_BENCHMARK_REPO",
+  "GITHUB_BENCHMARK_ASSIGNEE",
+  "GITHUB_BENCHMARK_REVIEWER",
+] as const;
 const REQUIRED_LIVE_ENV = [
   "ANTHROPIC_API_KEY",
   "GITHUB_PERSONAL_ACCESS_TOKEN",
@@ -352,7 +358,7 @@ async function runOneTask(context: RunContext): Promise<LlmTaskResult> {
   let completionTokens = 0;
   let injected = false;
   let injectionTurn: number | null = null;
-  let correctiveRetriesAfterInjection = 0;
+  let turnsToRecoveryAfterInjection: number | null = null;
   let recoveredWithinTwoTurns: boolean | null = null;
   let lastToolResultWasError = false;
   let outcome: LlmTaskOutcome = "gave_up";
@@ -417,12 +423,11 @@ async function runOneTask(context: RunContext): Promise<LlmTaskResult> {
             60_000,
             `${context.configId} ${context.task.id} ${toolCall.name}`,
           );
-          const isCorrectiveRetry = injected && injectionTurn !== null && turn > injectionTurn && isFirstCallSuccess(context.task, context.configId, toolCall);
-          if (isCorrectiveRetry) {
-            correctiveRetriesAfterInjection += 1;
-            if (recoveredWithinTwoTurns === null && toolResult.isError !== true) {
-              recoveredWithinTwoTurns = correctiveRetriesAfterInjection <= 2;
-            }
+          const injectedAtTurn = injectionTurn;
+          const isCorrectiveRetry = injected && injectedAtTurn !== null && turn > injectedAtTurn && isFirstCallSuccess(context.task, context.configId, toolCall);
+          if (isCorrectiveRetry && recoveredWithinTwoTurns === null && toolResult.isError !== true) {
+            turnsToRecoveryAfterInjection = turn - injectedAtTurn;
+            recoveredWithinTwoTurns = turnsToRecoveryAfterInjection <= 2;
           }
         }
 
@@ -477,7 +482,7 @@ async function runOneTask(context: RunContext): Promise<LlmTaskResult> {
     firstCallSuccess,
     turnsToCompletion: completed ? toolCallTurnCount : null,
     tokensToCompletion: completed ? tokenUsage : null,
-    inducedError: buildInducedErrorMetric(context.task, injected, recoveredWithinTwoTurns, correctiveRetriesAfterInjection),
+    inducedError: buildInducedErrorMetric(context.task, injected, recoveredWithinTwoTurns, turnsToRecoveryAfterInjection),
     startedAt,
     finishedAt,
     notes,
@@ -491,7 +496,7 @@ async function runOneTask(context: RunContext): Promise<LlmTaskResult> {
     firstCallSuccess,
     turnsToCompletion: completed ? toolCallTurnCount : null,
     tokensToCompletion: completed ? tokenUsage : null,
-    inducedError: buildInducedErrorMetric(context.task, injected, recoveredWithinTwoTurns, correctiveRetriesAfterInjection),
+    inducedError: buildInducedErrorMetric(context.task, injected, recoveredWithinTwoTurns, turnsToRecoveryAfterInjection),
     rawDataPaths: {
       transcripts: [context.transcriptPath],
       logs: [context.logPath],
@@ -791,7 +796,7 @@ function buildInducedErrorMetric(
   task: GitHubBenchmarkTask,
   injected: boolean,
   recoveredWithinTwoTurns: boolean | null,
-  turnsToRecovery: number,
+  turnsToRecovery: number | null,
 ): LlmTaskResult["inducedError"] {
   if (task.inducedError?.enabled !== true) return { injected: false, finalOutcome: "not_measured" };
   return {
@@ -813,7 +818,7 @@ function buildPromptVariables(
   dryRun: boolean,
 ): Record<string, string> {
   const values: Record<string, string> = {
-    ...stringEnvVariables(),
+    ...allowedPromptEnvVariables(),
     RUN_ID: runId,
     TASK_ID: task.id,
     CONFIG_ID: configId,
@@ -836,6 +841,15 @@ function buildPromptVariables(
     ]) {
       values[key] ??= `DRY_RUN_${key}`;
     }
+  }
+  return values;
+}
+
+function allowedPromptEnvVariables(): Record<string, string> {
+  const values: Record<string, string> = {};
+  for (const key of PROMPT_ENV_ALLOWLIST) {
+    const value = process.env[key];
+    if (typeof value === "string") values[key] = value;
   }
   return values;
 }

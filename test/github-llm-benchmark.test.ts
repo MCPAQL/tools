@@ -71,6 +71,12 @@ test("GitHub LLM benchmark dry-run emits normalizable metrics input and artifact
       .every((result) => result.inducedError?.recoveredWithinTwoTurns === true),
     true,
   );
+  assert.equal(
+    input.taskResults
+      .filter((result) => result.taskId === "error-issue-retry")
+      .every((result) => result.inducedError?.turnsToRecovery === 1),
+    true,
+  );
 
   const loaded = await loadLlmMetricsInput(outputPath);
   const report = buildLlmMetricsReport(loaded);
@@ -87,3 +93,54 @@ test("GitHub LLM benchmark dry-run emits normalizable metrics input and artifact
   assert.match(transcript, /"type":"tool_result"/);
 });
 
+test("GitHub LLM benchmark prompt substitution does not expose secret env vars", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "github-llm-benchmark-secret-"));
+  const manifestPath = path.join(root, "manifest.json");
+  const artifactRoot = path.join(root, "artifacts", "github-llm-benchmark");
+  const outputPath = path.join(artifactRoot, "metrics-input.json");
+  const originalSecret = process.env.ANTHROPIC_API_KEY;
+  process.env.ANTHROPIC_API_KEY = "super-secret-value";
+  await writeFile(manifestPath, JSON.stringify({
+    suite: "github-mcp",
+    runCountPerConfiguration: 1,
+    tasks: [
+      {
+        id: "secret-placeholder",
+        taskType: "issue_read",
+        prompt: "Open ${GITHUB_BENCHMARK_OWNER}/${GITHUB_BENCHMARK_REPO}; never inline ${ANTHROPIC_API_KEY}.",
+        expectedFirstTool: {
+          rawMcp: "list_issues",
+          mcpaqlAdapted: "mcp_aql_read",
+        },
+        expectedOperation: "list_issues",
+        requiresFixture: ["repository"],
+        mutation: false,
+        inducedError: { enabled: false },
+        expectedRawMethod: null,
+      },
+    ],
+  }, null, 2), "utf8");
+
+  try {
+    const input = await runGitHubLlmBenchmark({
+      manifestPath,
+      artifactRoot,
+      outputPath,
+      dryRun: true,
+      runsPerConfiguration: 1,
+      model: "mock-claude",
+    });
+
+    const promptPath = input.taskResults[0].rawDataPaths?.prompts?.[0];
+    assert.ok(promptPath);
+    const prompt = await readFile(promptPath, "utf8");
+    assert.doesNotMatch(prompt, /super-secret-value/);
+    assert.match(prompt, /DRY_RUN_ANTHROPIC_API_KEY/);
+  } finally {
+    if (originalSecret === undefined) {
+      delete process.env.ANTHROPIC_API_KEY;
+    } else {
+      process.env.ANTHROPIC_API_KEY = originalSecret;
+    }
+  }
+});
