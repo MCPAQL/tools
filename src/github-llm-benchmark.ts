@@ -89,10 +89,18 @@ interface FixtureAllocation {
   configId?: LlmMetricConfigId;
   runIndex?: number;
   variables?: Record<string, unknown>;
+  completionVerifier?: FixtureCompletionVerifier | Partial<Record<LlmMetricConfigId, FixtureCompletionVerifier>>;
   rawDataPaths?: {
     fixtures?: string[];
     other?: string[];
   };
+}
+
+interface FixtureCompletionVerifier {
+  toolName: string;
+  arguments?: Record<string, unknown>;
+  expectError?: boolean;
+  expectedTextIncludes?: string;
 }
 
 interface ToolDefinition {
@@ -155,6 +163,7 @@ interface RunContext {
   logPath: string;
   toolDefinitionsPath: string;
   fixturePaths: string[];
+  completionVerifier?: FixtureCompletionVerifier;
   client: BenchmarkMcpClient;
   tools: Array<Record<string, unknown>>;
   modelProvider: ModelProvider;
@@ -248,6 +257,7 @@ export async function runGitHubLlmBenchmark(options: GitHubLlmBenchmarkOptions):
               ...(options.fixtureInputPath ? [options.fixtureInputPath] : []),
               ...(allocation?.rawDataPaths?.fixtures ?? []),
             ],
+            completionVerifier: resolveCompletionVerifier(allocation, configId),
             client,
             tools: toolsByConfig[configId],
             modelProvider,
@@ -341,7 +351,8 @@ async function runOneTask(context: RunContext): Promise<LlmTaskResult> {
   let promptTokens = 0;
   let completionTokens = 0;
   let injected = false;
-  let toolCallsAfterInjection = 0;
+  let injectionTurn: number | null = null;
+  let correctiveRetriesAfterInjection = 0;
   let recoveredWithinTwoTurns: boolean | null = null;
   let lastToolResultWasError = false;
   let outcome: LlmTaskOutcome = "gave_up";
@@ -374,9 +385,14 @@ async function runOneTask(context: RunContext): Promise<LlmTaskResult> {
 
       const toolCalls = extractToolCalls(response.content);
       if (toolCalls.length === 0) {
-        outcome = firstToolCall && !lastToolResultWasError ? "completed" : "failed";
-        notes = firstToolCall ? undefined : "Model finished without calling a tool.";
         messages.push({ role: "assistant", content: response.content });
+        const completion = await verifyStoppedTaskCompletion(context, {
+          firstToolCall,
+          firstCallSuccess,
+          lastToolResultWasError,
+        });
+        outcome = completion.outcome;
+        notes = completion.notes;
         break;
       }
 
@@ -393,16 +409,20 @@ async function runOneTask(context: RunContext): Promise<LlmTaskResult> {
         let toolResult: McpToolResult;
         if (shouldInject) {
           injected = true;
+          injectionTurn = turn;
           toolResult = buildInjectedErrorResult(context.task);
         } else {
-          if (injected) toolCallsAfterInjection += 1;
           toolResult = await withTimeout(
             context.client.callTool({ name: toolCall.name, arguments: toolCall.input }),
             60_000,
             `${context.configId} ${context.task.id} ${toolCall.name}`,
           );
-          if (injected && recoveredWithinTwoTurns === null && toolResult.isError !== true) {
-            recoveredWithinTwoTurns = toolCallsAfterInjection <= 2;
+          const isCorrectiveRetry = injected && injectionTurn !== null && turn > injectionTurn && isFirstCallSuccess(context.task, context.configId, toolCall);
+          if (isCorrectiveRetry) {
+            correctiveRetriesAfterInjection += 1;
+            if (recoveredWithinTwoTurns === null && toolResult.isError !== true) {
+              recoveredWithinTwoTurns = correctiveRetriesAfterInjection <= 2;
+            }
           }
         }
 
@@ -457,7 +477,7 @@ async function runOneTask(context: RunContext): Promise<LlmTaskResult> {
     firstCallSuccess,
     turnsToCompletion: completed ? toolCallTurnCount : null,
     tokensToCompletion: completed ? tokenUsage : null,
-    inducedError: buildInducedErrorMetric(context.task, injected, recoveredWithinTwoTurns, toolCallsAfterInjection),
+    inducedError: buildInducedErrorMetric(context.task, injected, recoveredWithinTwoTurns, correctiveRetriesAfterInjection),
     startedAt,
     finishedAt,
     notes,
@@ -471,7 +491,7 @@ async function runOneTask(context: RunContext): Promise<LlmTaskResult> {
     firstCallSuccess,
     turnsToCompletion: completed ? toolCallTurnCount : null,
     tokensToCompletion: completed ? tokenUsage : null,
-    inducedError: buildInducedErrorMetric(context.task, injected, recoveredWithinTwoTurns, toolCallsAfterInjection),
+    inducedError: buildInducedErrorMetric(context.task, injected, recoveredWithinTwoTurns, correctiveRetriesAfterInjection),
     rawDataPaths: {
       transcripts: [context.transcriptPath],
       logs: [context.logPath],
@@ -482,6 +502,63 @@ async function runOneTask(context: RunContext): Promise<LlmTaskResult> {
     startedAt,
     finishedAt,
     notes,
+  };
+}
+
+async function verifyStoppedTaskCompletion(
+  context: RunContext,
+  state: {
+    firstToolCall?: ToolCall;
+    firstCallSuccess: boolean | null;
+    lastToolResultWasError: boolean;
+  },
+): Promise<{ outcome: LlmTaskOutcome; notes?: string }> {
+  if (!state.firstToolCall) {
+    return { outcome: "failed", notes: "Model finished without calling a tool." };
+  }
+  if (state.firstCallSuccess !== true) {
+    return { outcome: "failed", notes: "Model stopped after an incorrect first tool call." };
+  }
+  if (state.lastToolResultWasError) {
+    return { outcome: "failed", notes: "Model stopped after a tool error." };
+  }
+  if (context.dryRun) {
+    return { outcome: "completed" };
+  }
+  if (!context.completionVerifier) {
+    return {
+      outcome: "gave_up",
+      notes: "Task completion verifier is not configured; live run was not marked completed from tool success alone.",
+    };
+  }
+
+  const verifier = context.completionVerifier;
+  const result = await withTimeout(
+    context.client.callTool({ name: verifier.toolName, arguments: verifier.arguments ?? {} }),
+    60_000,
+    `${context.configId} ${context.task.id} completion verifier ${verifier.toolName}`,
+  );
+  const expectedError = verifier.expectError === true;
+  const ok = expectedError ? result.isError === true : result.isError !== true;
+  const textMatches = verifier.expectedTextIncludes
+    ? JSON.stringify(result).includes(verifier.expectedTextIncludes)
+    : true;
+  await appendTranscript(context.transcriptPath, {
+    type: "completion_verifier_result",
+    taskId: context.task.id,
+    configId: context.configId,
+    runIndex: context.runIndex,
+    verifier: deepRedact(verifier),
+    result: deepRedact(result),
+    ok: ok && textMatches,
+  });
+
+  if (ok && textMatches) {
+    return { outcome: "completed" };
+  }
+  return {
+    outcome: "failed",
+    notes: `Completion verifier ${verifier.toolName} did not confirm the requested repository state.`,
   };
 }
 
@@ -794,6 +871,24 @@ function findFixtureAllocation(
   );
 }
 
+function resolveCompletionVerifier(
+  allocation: FixtureAllocation | undefined,
+  configId: LlmMetricConfigId,
+): FixtureCompletionVerifier | undefined {
+  const verifier = allocation?.completionVerifier;
+  if (!verifier) return undefined;
+  if (isCompletionVerifier(verifier)) return verifier;
+  if (isRecord(verifier)) {
+    const configVerifier = verifier[configId];
+    if (isCompletionVerifier(configVerifier)) return configVerifier;
+  }
+  return undefined;
+}
+
+function isCompletionVerifier(value: unknown): value is FixtureCompletionVerifier {
+  return isRecord(value) && typeof value.toolName === "string" && value.toolName.length > 0;
+}
+
 function substitutePrompt(prompt: string, variables: Record<string, string>, dryRun: boolean): string {
   return prompt.replace(/\$\{([A-Z0-9_]+)\}/g, (match, key: string) => {
     if (variables[key] !== undefined) return variables[key];
@@ -851,8 +946,8 @@ function childEnv(): Record<string, string> {
   const env = stringEnvVariables();
   const token = requireEnv("GITHUB_PERSONAL_ACCESS_TOKEN");
   env.GITHUB_PERSONAL_ACCESS_TOKEN = token;
-  env.GITHUB_TOKEN ??= token;
-  env.GH_TOKEN ??= token;
+  env.GITHUB_TOKEN = token;
+  env.GH_TOKEN = token;
   return env;
 }
 

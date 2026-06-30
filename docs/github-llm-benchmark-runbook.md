@@ -71,6 +71,8 @@ The manifest also declares `fixtureIsolation.policy: fresh_per_task_config_run`.
 
 For mutation tasks, never reuse a target that may have been closed, deleted, merged, relabeled, assigned, submitted as a pending review, or otherwise changed by an earlier repeat. Create per-run fixture IDs such as `${TASK_ID}-${CONFIG_ID}-${RUN_INDEX}`, record them in `artifacts/github-llm-benchmark/fixtures/setup.json`, and tear them down after report generation. If fixture reset fails, mark that run `error` and do not continue collecting results against dirty state.
 
+Each fixture allocation may also include a task-specific `completionVerifier` tool call, either shared or keyed by `raw_mcp` / `mcpaql_adapted`. Live runs are marked `completed` only after the model uses the expected first tool, receives no final tool error, and this verifier confirms the requested disposable-repository state. If no verifier is provided, the live runner records the task as non-completed so aggregate turns/tokens are not inflated by a wrong-but-successful tool call. Dry-run mode is exempt because it validates artifact shape only.
+
 ## Raw Data Layout
 
 Write all live benchmark artifacts under:
