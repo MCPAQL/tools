@@ -27,16 +27,21 @@ const PROMPT_ENV_ALLOWLIST = [
 ] as const;
 const REQUIRED_LIVE_ENV = [
   "ANTHROPIC_API_KEY",
-  "GITHUB_PERSONAL_ACCESS_TOKEN",
   "GITHUB_BENCHMARK_OWNER",
   "GITHUB_BENCHMARK_REPO",
   "GITHUB_BENCHMARK_ASSIGNEE",
   "GITHUB_BENCHMARK_REVIEWER",
+] as const;
+const RAW_LIVE_ENV = [
+  "GITHUB_PERSONAL_ACCESS_TOKEN",
+  "RAW_GITHUB_MCP_COMMAND",
+  "GITHUB_TOOLSETS",
+] as const;
+const ADAPTED_LIVE_ENV = [
+  "GITHUB_PERSONAL_ACCESS_TOKEN",
   "MCPAQL_GITHUB_ADAPTER_SERVER",
   "MCPAQL_GITHUB_ADAPTER_SCHEMA",
   "MCPAQL_GITHUB_ADAPTER_PROVENANCE",
-  "RAW_GITHUB_MCP_COMMAND",
-  "GITHUB_TOOLSETS",
 ] as const;
 
 export interface GitHubLlmBenchmarkOptions {
@@ -184,14 +189,13 @@ interface RunContext {
 
 export async function runGitHubLlmBenchmark(options: GitHubLlmBenchmarkOptions): Promise<LlmMetricsReportInput> {
   const dryRun = options.dryRun === true;
-  if (!dryRun) validateLiveEnvironment();
-
   const manifest = await loadManifest(options.manifestPath);
   const fixtureInput = options.fixtureInputPath ? await loadFixtureInput(options.fixtureInputPath) : undefined;
   const artifactRoot = options.artifactRoot ?? DEFAULT_ARTIFACT_ROOT;
   const outputPath = options.outputPath;
   const runsPerConfiguration = options.runsPerConfiguration ?? manifest.runCountPerConfiguration ?? 1;
   const configIds = options.configIds ?? [...CONFIG_IDS];
+  if (!dryRun) validateLiveEnvironment(configIds, options.model);
   const selectedTasks = selectTasks(manifest.tasks, options);
   const startedAt = options.startedAt ?? new Date().toISOString();
   const model = options.model ?? process.env.ANTHROPIC_MODEL ?? (dryRun ? "mock-claude-github-llm-runner" : "");
@@ -206,36 +210,29 @@ export async function runGitHubLlmBenchmark(options: GitHubLlmBenchmarkOptions):
     });
 
   const clients = dryRun
-    ? createDryRunClients(selectedTasks)
-    : await createLiveClients();
+    ? createDryRunClients(selectedTasks, configIds)
+    : await createLiveClients(configIds);
 
   try {
-    const rawTools = await listAllTools(clients.raw);
-    const adaptedTools = await listAllTools(clients.adapted);
-    const rawToolsPath = path.join(artifactRoot, "raw-mcp", "tool-definitions.json");
-    const adaptedToolsPath = path.join(artifactRoot, "mcpaql-adapted", "tool-definitions.json");
-    await writeJsonFile(rawToolsPath, { tools: deepRedact(rawTools) });
-    await writeJsonFile(adaptedToolsPath, { tools: deepRedact(adaptedTools) });
-    assertToolCoverage(selectedTasks, rawTools, adaptedTools);
+    const toolDefinitionsPaths = buildToolDefinitionsPaths(artifactRoot);
+    const listedTools = await listSelectedTools(clients, configIds);
+    for (const configId of configIds) {
+      await writeJsonFile(toolDefinitionsPaths[configId], { tools: deepRedact(requireConfigValue(listedTools, configId, "tool definitions")) });
+      assertToolCoverage(selectedTasks, configId, requireConfigValue(listedTools, configId, "tool definitions"));
+    }
 
     const systemPrompt = buildSystemPrompt();
-    const toolsByConfig = {
-      [RAW_CONFIG_ID]: toAnthropicTools(rawTools),
-      [ADAPTED_CONFIG_ID]: toAnthropicTools(adaptedTools),
-    };
-    const toolDefinitionTokensByConfig = {
-      [RAW_CONFIG_ID]: await modelProvider.countToolDefinitionTokens(model, systemPrompt, toolsByConfig.raw_mcp),
-      [ADAPTED_CONFIG_ID]: await modelProvider.countToolDefinitionTokens(model, systemPrompt, toolsByConfig.mcpaql_adapted),
-    };
+    const toolsByConfig = await buildAnthropicToolsByConfig(listedTools, configIds);
+    const toolDefinitionTokensByConfig = await countToolDefinitionTokensByConfig(modelProvider, model, systemPrompt, toolsByConfig, configIds);
     const taskResults: LlmTaskResult[] = [];
 
     for (const configId of configIds) {
       const configDir = configId === RAW_CONFIG_ID ? "raw-mcp" : "mcpaql-adapted";
-      const client = configId === RAW_CONFIG_ID ? clients.raw : clients.adapted;
+      const client = requireConfigValue(clients, configId, "MCP client");
       for (const task of selectedTasks) {
         for (let runIndex = 0; runIndex < runsPerConfiguration; runIndex += 1) {
           const runId = `${task.id}-${configId}-${runIndex}`;
-          const allocation = findFixtureAllocation(fixtureInput, task.id, configId, runIndex);
+          const allocation = findFixtureAllocation(fixtureInput, task.id, configId, runIndex, task.mutation === true);
           const variables = buildPromptVariables(task, configId, runIndex, runId, fixtureInput, allocation, dryRun);
           const prompt = substitutePrompt(task.prompt, variables, dryRun);
           const unresolved = findUnresolvedPlaceholders(prompt);
@@ -257,7 +254,7 @@ export async function runGitHubLlmBenchmark(options: GitHubLlmBenchmarkOptions):
             promptPath,
             transcriptPath,
             logPath,
-            toolDefinitionsPath: configId === RAW_CONFIG_ID ? rawToolsPath : adaptedToolsPath,
+            toolDefinitionsPath: toolDefinitionsPaths[configId],
             fixturePaths: [
               options.manifestPath,
               ...(options.fixtureInputPath ? [options.fixtureInputPath] : []),
@@ -265,14 +262,14 @@ export async function runGitHubLlmBenchmark(options: GitHubLlmBenchmarkOptions):
             ],
             completionVerifier: resolveCompletionVerifier(allocation, configId),
             client,
-            tools: toolsByConfig[configId],
+            tools: requireConfigValue(toolsByConfig, configId, "model tools"),
             modelProvider,
             model,
             systemPrompt,
             maxTokens: options.maxTokens ?? DEFAULT_MAX_TOKENS,
             maxTurns: options.maxTurns ?? DEFAULT_MAX_TURNS,
             temperature: options.temperature ?? 0,
-            toolDefinitionTokensPerTurn: toolDefinitionTokensByConfig[configId],
+            toolDefinitionTokensPerTurn: requireConfigValue(toolDefinitionTokensByConfig, configId, "tool definition token count"),
             dryRun,
           }));
         }
@@ -301,7 +298,7 @@ export async function runGitHubLlmBenchmark(options: GitHubLlmBenchmarkOptions):
           fixtureAllocationContract: "Consumes optional variables/allocations from fixture setup output; fixture creation/reset is reserved for tools#30.",
         },
       },
-      configurations: buildConfigurations(artifactRoot),
+      configurations: buildConfigurations(artifactRoot, configIds),
       rawDataPaths: {
         transcripts: [
           path.join(artifactRoot, "raw-mcp", "transcripts"),
@@ -315,7 +312,7 @@ export async function runGitHubLlmBenchmark(options: GitHubLlmBenchmarkOptions):
           path.join(artifactRoot, "raw-mcp", "prompts"),
           path.join(artifactRoot, "mcpaql-adapted", "prompts"),
         ],
-        toolDefinitions: [rawToolsPath, adaptedToolsPath],
+        toolDefinitions: configIds.map((configId) => toolDefinitionsPaths[configId]),
         fixtures: [
           options.manifestPath,
           ...(options.fixtureInputPath ? [options.fixtureInputPath] : []),
@@ -331,7 +328,7 @@ export async function runGitHubLlmBenchmark(options: GitHubLlmBenchmarkOptions):
     await writeJsonFile(outputPath, input);
     return input;
   } finally {
-    await Promise.allSettled([clients.raw.close(), clients.adapted.close()]);
+    await Promise.allSettled(Object.values(clients).map((client) => client.close()));
   }
 }
 
@@ -567,8 +564,16 @@ async function verifyStoppedTaskCompletion(
   };
 }
 
-function validateLiveEnvironment(): void {
-  const missing = REQUIRED_LIVE_ENV.filter((name) => !process.env[name]);
+function validateLiveEnvironment(configIds: readonly LlmMetricConfigId[], modelOption: string | undefined): void {
+  const required = new Set<string>(REQUIRED_LIVE_ENV);
+  if (!modelOption) required.add("ANTHROPIC_MODEL");
+  if (configIds.includes(RAW_CONFIG_ID)) {
+    for (const name of RAW_LIVE_ENV) required.add(name);
+  }
+  if (configIds.includes(ADAPTED_CONFIG_ID)) {
+    for (const name of ADAPTED_LIVE_ENV) required.add(name);
+  }
+  const missing = [...required].filter((name) => !process.env[name]);
   if (missing.length > 0) {
     throw new Error(`Missing required live benchmark environment variables: ${missing.join(", ")}.`);
   }
@@ -614,34 +619,42 @@ async function ensureArtifactLayout(artifactRoot: string): Promise<void> {
   ]);
 }
 
-async function createLiveClients(): Promise<{ raw: BenchmarkMcpClient; adapted: BenchmarkMcpClient }> {
-  const rawClient = new Client({ name: "github-llm-benchmark-raw", version: "0.1.0" });
-  const adaptedClient = new Client({ name: "github-llm-benchmark-mcpaql", version: "0.1.0" });
-  const rawTransport = new StdioClientTransport({
-    command: "sh",
-    args: ["-lc", requireEnv("RAW_GITHUB_MCP_COMMAND")],
-    env: childEnv(),
-    stderr: "pipe",
-  });
-  const adaptedTransport = new StdioClientTransport({
-    command: "node",
-    args: [requireEnv("MCPAQL_GITHUB_ADAPTER_SERVER")],
-    env: childEnv(),
-    stderr: "pipe",
-  });
-  await rawClient.connect(rawTransport);
-  await adaptedClient.connect(adaptedTransport);
-  return {
-    raw: rawClient as unknown as BenchmarkMcpClient,
-    adapted: adaptedClient as unknown as BenchmarkMcpClient,
-  };
+async function createLiveClients(configIds: readonly LlmMetricConfigId[]): Promise<Partial<Record<LlmMetricConfigId, BenchmarkMcpClient>>> {
+  const clients: Partial<Record<LlmMetricConfigId, BenchmarkMcpClient>> = {};
+  if (configIds.includes(RAW_CONFIG_ID)) {
+    const rawClient = new Client({ name: "github-llm-benchmark-raw", version: "0.1.0" });
+    const rawTransport = new StdioClientTransport({
+      command: "sh",
+      args: ["-lc", requireEnv("RAW_GITHUB_MCP_COMMAND")],
+      env: childEnv(),
+      stderr: "pipe",
+    });
+    await rawClient.connect(rawTransport);
+    clients[RAW_CONFIG_ID] = rawClient as unknown as BenchmarkMcpClient;
+  }
+  if (configIds.includes(ADAPTED_CONFIG_ID)) {
+    const adaptedClient = new Client({ name: "github-llm-benchmark-mcpaql", version: "0.1.0" });
+    const adaptedTransport = new StdioClientTransport({
+      command: "node",
+      args: [requireEnv("MCPAQL_GITHUB_ADAPTER_SERVER")],
+      env: childEnv(),
+      stderr: "pipe",
+    });
+    await adaptedClient.connect(adaptedTransport);
+    clients[ADAPTED_CONFIG_ID] = adaptedClient as unknown as BenchmarkMcpClient;
+  }
+  return clients;
 }
 
-function createDryRunClients(tasks: GitHubBenchmarkTask[]): { raw: BenchmarkMcpClient; adapted: BenchmarkMcpClient } {
-  return {
-    raw: new DryRunMcpClient(buildDryRunToolDefinitions(tasks, RAW_CONFIG_ID)),
-    adapted: new DryRunMcpClient(buildDryRunToolDefinitions(tasks, ADAPTED_CONFIG_ID)),
-  };
+function createDryRunClients(
+  tasks: GitHubBenchmarkTask[],
+  configIds: readonly LlmMetricConfigId[],
+): Partial<Record<LlmMetricConfigId, BenchmarkMcpClient>> {
+  const clients: Partial<Record<LlmMetricConfigId, BenchmarkMcpClient>> = {};
+  for (const configId of configIds) {
+    clients[configId] = new DryRunMcpClient(buildDryRunToolDefinitions(tasks, configId));
+  }
+  return clients;
 }
 
 async function listAllTools(client: BenchmarkMcpClient): Promise<ToolDefinition[]> {
@@ -656,21 +669,79 @@ async function listAllTools(client: BenchmarkMcpClient): Promise<ToolDefinition[
   return tools;
 }
 
+function buildToolDefinitionsPaths(artifactRoot: string): Record<LlmMetricConfigId, string> {
+  return {
+    [RAW_CONFIG_ID]: path.join(artifactRoot, "raw-mcp", "tool-definitions.json"),
+    [ADAPTED_CONFIG_ID]: path.join(artifactRoot, "mcpaql-adapted", "tool-definitions.json"),
+  };
+}
+
+async function listSelectedTools(
+  clients: Partial<Record<LlmMetricConfigId, BenchmarkMcpClient>>,
+  configIds: readonly LlmMetricConfigId[],
+): Promise<Partial<Record<LlmMetricConfigId, ToolDefinition[]>>> {
+  const listed: Partial<Record<LlmMetricConfigId, ToolDefinition[]>> = {};
+  for (const configId of configIds) {
+    listed[configId] = await listAllTools(requireConfigValue(clients, configId, "MCP client"));
+  }
+  return listed;
+}
+
+async function buildAnthropicToolsByConfig(
+  listedTools: Partial<Record<LlmMetricConfigId, ToolDefinition[]>>,
+  configIds: readonly LlmMetricConfigId[],
+): Promise<Partial<Record<LlmMetricConfigId, Array<Record<string, unknown>>>>> {
+  const tools: Partial<Record<LlmMetricConfigId, Array<Record<string, unknown>>>> = {};
+  for (const configId of configIds) {
+    tools[configId] = toAnthropicTools(requireConfigValue(listedTools, configId, "tool definitions"));
+  }
+  return tools;
+}
+
+async function countToolDefinitionTokensByConfig(
+  modelProvider: ModelProvider,
+  model: string,
+  systemPrompt: string,
+  toolsByConfig: Partial<Record<LlmMetricConfigId, Array<Record<string, unknown>>>>,
+  configIds: readonly LlmMetricConfigId[],
+): Promise<Partial<Record<LlmMetricConfigId, number>>> {
+  const counts: Partial<Record<LlmMetricConfigId, number>> = {};
+  for (const configId of configIds) {
+    counts[configId] = await modelProvider.countToolDefinitionTokens(
+      model,
+      systemPrompt,
+      requireConfigValue(toolsByConfig, configId, "model tools"),
+    );
+  }
+  return counts;
+}
+
+function requireConfigValue<T>(
+  values: Partial<Record<LlmMetricConfigId, T>>,
+  configId: LlmMetricConfigId,
+  label: string,
+): T {
+  const value = values[configId];
+  if (value === undefined) throw new Error(`Missing ${label} for selected configuration ${configId}.`);
+  return value;
+}
+
 function assertToolCoverage(
   tasks: GitHubBenchmarkTask[],
-  rawTools: ToolDefinition[],
-  adaptedTools: ToolDefinition[],
+  configId: LlmMetricConfigId,
+  tools: ToolDefinition[],
 ): void {
-  const rawByName = new Map(rawTools.map((tool) => [tool.name, tool]));
-  const adaptedByName = new Map(adaptedTools.map((tool) => [tool.name, tool]));
+  const byName = new Map(tools.map((tool) => [tool.name, tool]));
   for (const task of tasks) {
-    const rawTool = rawByName.get(task.expectedFirstTool.rawMcp);
-    if (!rawTool) throw new Error(`Raw MCP tool "${task.expectedFirstTool.rawMcp}" required by task "${task.id}" was not listed by the server.`);
-    if (task.expectedRawMethod && !toolDefinitionContainsString(rawTool, task.expectedRawMethod)) {
-      throw new Error(`Raw MCP tool "${rawTool.name}" for task "${task.id}" does not expose expected method/action "${task.expectedRawMethod}".`);
+    if (configId === RAW_CONFIG_ID) {
+      const rawTool = byName.get(task.expectedFirstTool.rawMcp);
+      if (!rawTool) throw new Error(`Raw MCP tool "${task.expectedFirstTool.rawMcp}" required by task "${task.id}" was not listed by the server.`);
+      if (task.expectedRawMethod && !toolDefinitionContainsString(rawTool, task.expectedRawMethod)) {
+        throw new Error(`Raw MCP tool "${rawTool.name}" for task "${task.id}" does not expose expected method/action "${task.expectedRawMethod}".`);
+      }
+      continue;
     }
-
-    const adaptedTool = adaptedByName.get(task.expectedFirstTool.mcpaqlAdapted);
+    const adaptedTool = byName.get(task.expectedFirstTool.mcpaqlAdapted);
     if (!adaptedTool) throw new Error(`MCPAQL tool "${task.expectedFirstTool.mcpaqlAdapted}" required by task "${task.id}" was not listed by the adapter.`);
     if (!toolDefinitionContainsString(adaptedTool, task.expectedOperation)) {
       throw new Error(`MCPAQL tool "${adaptedTool.name}" for task "${task.id}" does not expose expected operation "${task.expectedOperation}".`);
@@ -876,13 +947,22 @@ function findFixtureAllocation(
   taskId: string,
   configId: LlmMetricConfigId,
   runIndex: number,
+  requireExact: boolean,
 ): FixtureAllocation | undefined {
   const allocations = [...(fixtureInput?.allocations ?? []), ...(fixtureInput?.runs ?? [])];
-  return allocations.find((allocation) =>
-    (!allocation.taskId || allocation.taskId === taskId) &&
-    (!allocation.configId || allocation.configId === configId) &&
-    (allocation.runIndex === undefined || allocation.runIndex === runIndex)
+  const exact = allocations.find((allocation) =>
+    allocation.taskId === taskId &&
+    allocation.configId === configId &&
+    allocation.runIndex === runIndex
   );
+  if (exact || !requireExact) {
+    return exact ?? allocations.find((allocation) =>
+      (!allocation.taskId || allocation.taskId === taskId) &&
+      (!allocation.configId || allocation.configId === configId) &&
+      (allocation.runIndex === undefined || allocation.runIndex === runIndex)
+    );
+  }
+  throw new Error(`Mutable task "${taskId}" requires an exact fixture allocation for ${configId} run ${runIndex}.`);
 }
 
 function resolveCompletionVerifier(
@@ -914,9 +994,12 @@ function findUnresolvedPlaceholders(value: string): string[] {
   return [...value.matchAll(/\$\{([A-Z0-9_]+)\}/g)].map((match) => match[1]);
 }
 
-function buildConfigurations(artifactRoot: string): LlmMetricConfiguration[] {
-  return [
-    {
+function buildConfigurations(
+  artifactRoot: string,
+  configIds: readonly LlmMetricConfigId[],
+): LlmMetricConfiguration[] {
+  const configurations: Record<LlmMetricConfigId, LlmMetricConfiguration> = {
+    [RAW_CONFIG_ID]: {
       id: RAW_CONFIG_ID,
       label: "Raw GitHub MCP",
       description: "Raw GitHub MCP tool list exposed directly to the model.",
@@ -926,7 +1009,7 @@ function buildConfigurations(artifactRoot: string): LlmMetricConfiguration[] {
         toolDefinitionsPath: path.join(artifactRoot, "raw-mcp", "tool-definitions.json"),
       },
     },
-    {
+    [ADAPTED_CONFIG_ID]: {
       id: ADAPTED_CONFIG_ID,
       label: "MCPAQL-adapted GitHub MCP",
       description: "MCPAQL adapter endpoint tools over the GitHub MCP operation surface.",
@@ -938,7 +1021,8 @@ function buildConfigurations(artifactRoot: string): LlmMetricConfiguration[] {
         toolDefinitionsPath: path.join(artifactRoot, "mcpaql-adapted", "tool-definitions.json"),
       },
     },
-  ];
+  };
+  return configIds.map((configId) => configurations[configId]);
 }
 
 function buildSystemPrompt(): string {

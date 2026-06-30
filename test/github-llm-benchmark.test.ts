@@ -144,3 +144,102 @@ test("GitHub LLM benchmark prompt substitution does not expose secret env vars",
     }
   }
 });
+
+test("GitHub LLM benchmark dry-run honors single configuration selection", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "github-llm-benchmark-config-"));
+  const manifestPath = path.join(root, "manifest.json");
+  const artifactRoot = path.join(root, "artifacts", "github-llm-benchmark");
+  const outputPath = path.join(artifactRoot, "metrics-input.json");
+  await writeFile(manifestPath, JSON.stringify({
+    suite: "github-mcp",
+    runCountPerConfiguration: 1,
+    tasks: [
+      {
+        id: "issue-list-open",
+        taskType: "issue_read",
+        prompt: "List issues in ${GITHUB_BENCHMARK_OWNER}/${GITHUB_BENCHMARK_REPO}.",
+        expectedFirstTool: {
+          rawMcp: "list_issues",
+          mcpaqlAdapted: "mcp_aql_read",
+        },
+        expectedOperation: "list_issues",
+        requiresFixture: ["repository"],
+        mutation: false,
+        inducedError: { enabled: false },
+        expectedRawMethod: null,
+      },
+    ],
+  }, null, 2), "utf8");
+
+  const input = await runGitHubLlmBenchmark({
+    manifestPath,
+    artifactRoot,
+    outputPath,
+    dryRun: true,
+    runsPerConfiguration: 1,
+    configIds: ["raw_mcp"],
+    model: "mock-claude",
+  });
+
+  assert.deepEqual(input.configurations.map((configuration) => configuration.id), ["raw_mcp"]);
+  assert.equal(input.taskResults.length, 1);
+  assert.equal(input.taskResults[0].configId, "raw_mcp");
+  await stat(path.join(artifactRoot, "raw-mcp", "tool-definitions.json"));
+  await assert.rejects(
+    stat(path.join(artifactRoot, "mcpaql-adapted", "tool-definitions.json")),
+    /ENOENT/,
+  );
+});
+
+test("GitHub LLM benchmark rejects wildcard fixture allocations for mutable tasks", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "github-llm-benchmark-mutable-"));
+  const manifestPath = path.join(root, "manifest.json");
+  const fixturePath = path.join(root, "fixtures.json");
+  const artifactRoot = path.join(root, "artifacts", "github-llm-benchmark");
+  const outputPath = path.join(artifactRoot, "metrics-input.json");
+  await writeFile(manifestPath, JSON.stringify({
+    suite: "github-mcp",
+    runCountPerConfiguration: 1,
+    tasks: [
+      {
+        id: "issue-close",
+        taskType: "issue_update",
+        prompt: "Close issue ${FIXTURE_ISSUE_NUMBER}.",
+        expectedFirstTool: {
+          rawMcp: "update_issue_state",
+          mcpaqlAdapted: "mcp_aql_update",
+        },
+        expectedOperation: "issue_write",
+        requiresFixture: ["open_issue"],
+        mutation: true,
+        inducedError: { enabled: false },
+        expectedRawMethod: null,
+        expectedAdaptedMethod: "update",
+      },
+    ],
+  }, null, 2), "utf8");
+  await writeFile(fixturePath, JSON.stringify({
+    allocations: [
+      {
+        taskId: "issue-close",
+        variables: {
+          FIXTURE_ISSUE_NUMBER: 123,
+        },
+      },
+    ],
+  }, null, 2), "utf8");
+
+  await assert.rejects(
+    runGitHubLlmBenchmark({
+      manifestPath,
+      artifactRoot,
+      outputPath,
+      fixtureInputPath: fixturePath,
+      dryRun: true,
+      runsPerConfiguration: 1,
+      configIds: ["raw_mcp"],
+      model: "mock-claude",
+    }),
+    /requires an exact fixture allocation/,
+  );
+});
