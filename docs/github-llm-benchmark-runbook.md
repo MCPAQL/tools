@@ -21,6 +21,8 @@ Issue MCPAQL/tools#26 adds induced-danger gating. Keep it as a follow-up for the
 Set these before running a live benchmark:
 
 - `ANTHROPIC_API_KEY`: required for the Claude benchmark model.
+- `ANTHROPIC_MODEL`: exact Claude model string to use for every task/configuration run.
+- `ANTHROPIC_MODEL_VERSION`: optional model-version metadata. If omitted, the live runner records the model string as the version.
 - `GITHUB_PERSONAL_ACCESS_TOKEN`: required by both raw GitHub MCP and the MCPAQL adapter. The token must target a disposable benchmark org or repository, not a production repo.
 - `GITHUB_BENCHMARK_OWNER`: owner for the disposable benchmark repository.
 - `GITHUB_BENCHMARK_REPO`: disposable benchmark repository name.
@@ -155,6 +157,20 @@ Check required live-run inputs without printing secrets:
 bash scripts/check-github-llm-benchmark-env.sh
 ```
 
+Validate the live-runner artifact shape without credentials or live MCP/API calls:
+
+```bash
+npm run github-llm-benchmark -- \
+  --dry-run \
+  --runs 1 \
+  --task-limit 1 \
+  --artifact-root /tmp/github-llm-benchmark-dry-run \
+  --output /tmp/github-llm-benchmark-dry-run/metrics-input.json \
+  --model mock-claude
+```
+
+Dry-run output is synthetic shape-validation data only. Do not cite it as benchmark evidence.
+
 Create an empty normalized report from the template:
 
 ```bash
@@ -166,7 +182,22 @@ npm run parity -- \
 
 The command above validates the report generator only. It is not a benchmark run.
 
-After a live runner captures real task results into `artifacts/github-llm-benchmark/metrics-input.json`, normalize the final reports with:
+After tools#30 or a manual coordinator setup creates fresh disposable fixtures for every task/configuration/run tuple, capture live task results with:
+
+```bash
+npm run github-llm-benchmark -- \
+  --manifest fixtures/github-llm-benchmark-tasks.json \
+  --fixtures artifacts/github-llm-benchmark/fixtures/setup.json \
+  --artifact-root artifacts/github-llm-benchmark \
+  --output artifacts/github-llm-benchmark/metrics-input.json \
+  --runs 10 \
+  --model "$ANTHROPIC_MODEL" \
+  --model-version "$ANTHROPIC_MODEL_VERSION"
+```
+
+The `--fixtures` file is the fixture-allocation handoff for tools#30. The live runner consumes fixture variables and raw fixture paths from that file, but it does not create, reset, or tear down disposable GitHub state.
+
+Once the live runner captures real task results into `artifacts/github-llm-benchmark/metrics-input.json`, normalize the final reports with:
 
 ```bash
 npm run parity -- \
@@ -187,12 +218,14 @@ node scripts/summarize-github-llm-task-types.mjs \
 
 ## Current Blocker
 
-As of this preparation pass, the local environment did not expose `ANTHROPIC_API_KEY`, `GITHUB_PERSONAL_ACCESS_TOKEN`, `GITHUB_TOKEN`, or `GH_TOKEN`. GitHub CLI auth was present, but the benchmark runner needs an explicit model API key and an explicit disposable-repo token environment variable.
+As of this live-runner implementation pass, the local environment did not expose the required Anthropic model/API inputs, disposable GitHub token/repository inputs, raw MCP command, adapter paths, or `GITHUB_TOOLSETS`. GitHub CLI auth was present, but the benchmark runner needs explicit live benchmark environment variables and a fixture allocation file.
 
-Next command for the coordinator after credentials and adapter paths are available:
+Next command for the coordinator after credentials, adapter paths, model metadata, and disposable fixture allocation are available:
 
 ```bash
 ANTHROPIC_API_KEY=... \
+ANTHROPIC_MODEL=... \
+ANTHROPIC_MODEL_VERSION=... \
 GITHUB_PERSONAL_ACCESS_TOKEN=... \
 GITHUB_BENCHMARK_OWNER=... \
 GITHUB_BENCHMARK_REPO=... \
@@ -203,10 +236,14 @@ MCPAQL_GITHUB_ADAPTER_SCHEMA=... \
 MCPAQL_GITHUB_ADAPTER_PROVENANCE=... \
 RAW_GITHUB_MCP_COMMAND=... \
 GITHUB_TOOLSETS=default,actions,labels,git \
-npm run parity -- \
-  --llm-metrics-input artifacts/github-llm-benchmark/metrics-input.json \
-  --llm-metrics-report artifacts/github-llm-benchmark/llm-metrics.json \
-  --llm-summary artifacts/github-llm-benchmark/llm-metrics.md
+npm run github-llm-benchmark -- \
+  --manifest fixtures/github-llm-benchmark-tasks.json \
+  --fixtures artifacts/github-llm-benchmark/fixtures/setup.json \
+  --artifact-root artifacts/github-llm-benchmark \
+  --output artifacts/github-llm-benchmark/metrics-input.json \
+  --runs 10 \
+  --model "$ANTHROPIC_MODEL" \
+  --model-version "$ANTHROPIC_MODEL_VERSION"
 ```
 
-Replace the final `npm run parity` normalization step with the live runner command once the live runner exists. Keep the normalization and task-type aggregate commands as the final report-generation steps.
+Keep the normalization and task-type aggregate commands as the final report-generation steps after the live runner finishes.
