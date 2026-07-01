@@ -328,7 +328,7 @@ export async function runGitHubLlmBenchmark(options: GitHubLlmBenchmarkOptions):
     await writeJsonFile(outputPath, input);
     return input;
   } finally {
-    await Promise.allSettled(Object.values(clients).map((client) => client.close()));
+    await closeClientsQuietly(clients);
   }
 }
 
@@ -621,29 +621,38 @@ async function ensureArtifactLayout(artifactRoot: string): Promise<void> {
 
 async function createLiveClients(configIds: readonly LlmMetricConfigId[]): Promise<Partial<Record<LlmMetricConfigId, BenchmarkMcpClient>>> {
   const clients: Partial<Record<LlmMetricConfigId, BenchmarkMcpClient>> = {};
-  if (configIds.includes(RAW_CONFIG_ID)) {
-    const rawClient = new Client({ name: "github-llm-benchmark-raw", version: "0.1.0" });
-    const rawTransport = new StdioClientTransport({
-      command: "sh",
-      args: ["-lc", requireEnv("RAW_GITHUB_MCP_COMMAND")],
-      env: childEnv(),
-      stderr: "pipe",
-    });
-    await rawClient.connect(rawTransport);
-    clients[RAW_CONFIG_ID] = rawClient as unknown as BenchmarkMcpClient;
-  }
-  if (configIds.includes(ADAPTED_CONFIG_ID)) {
-    const adaptedClient = new Client({ name: "github-llm-benchmark-mcpaql", version: "0.1.0" });
-    const adaptedTransport = new StdioClientTransport({
-      command: "node",
-      args: [requireEnv("MCPAQL_GITHUB_ADAPTER_SERVER")],
-      env: childEnv(),
-      stderr: "pipe",
-    });
-    await adaptedClient.connect(adaptedTransport);
-    clients[ADAPTED_CONFIG_ID] = adaptedClient as unknown as BenchmarkMcpClient;
+  try {
+    if (configIds.includes(RAW_CONFIG_ID)) {
+      const rawClient = new Client({ name: "github-llm-benchmark-raw", version: "0.1.0" });
+      const rawTransport = new StdioClientTransport({
+        command: "sh",
+        args: ["-lc", requireEnv("RAW_GITHUB_MCP_COMMAND")],
+        env: childEnv(),
+        stderr: "pipe",
+      });
+      await rawClient.connect(rawTransport);
+      clients[RAW_CONFIG_ID] = rawClient as unknown as BenchmarkMcpClient;
+    }
+    if (configIds.includes(ADAPTED_CONFIG_ID)) {
+      const adaptedClient = new Client({ name: "github-llm-benchmark-mcpaql", version: "0.1.0" });
+      const adaptedTransport = new StdioClientTransport({
+        command: "node",
+        args: [requireEnv("MCPAQL_GITHUB_ADAPTER_SERVER")],
+        env: childEnv(),
+        stderr: "pipe",
+      });
+      await adaptedClient.connect(adaptedTransport);
+      clients[ADAPTED_CONFIG_ID] = adaptedClient as unknown as BenchmarkMcpClient;
+    }
+  } catch (error) {
+    await closeClientsQuietly(clients);
+    throw error;
   }
   return clients;
+}
+
+async function closeClientsQuietly(clients: Partial<Record<LlmMetricConfigId, BenchmarkMcpClient>>): Promise<void> {
+  await Promise.allSettled(Object.values(clients).map((client) => client.close()));
 }
 
 function createDryRunClients(
