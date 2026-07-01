@@ -68,15 +68,19 @@ async function main(): Promise<void> {
   const sdef = await parseSdefFile(resolvedPath);
   const { operations, warnings } = sdefToOperations(sdef);
 
+  // Prefer --app name > bundle name from path > dictionary title (which is often "Foo Terminology")
+  const bundleMatch = resolvedPath.match(/\/([^/]+)\.app\//);
+  const derivedAppName = appName || (bundleMatch ? bundleMatch[1] : null) || sdef.application || path.basename(resolvedPath, ".sdef");
+
   const bundle: DiscoveryBundle = {
     schema_version: "1.0.0-draft",
     source: {
-      name: sdef.application || appName || path.basename(resolvedPath, ".sdef"),
-      server_url: `native-applescript://${sdef.application || appName}`,
+      name: derivedAppName,
+      server_url: `native-applescript://${derivedAppName}`,
       transport: "native-applescript",
       captured_at: new Date().toISOString(),
       server: {
-        name: sdef.application || appName,
+        name: derivedAppName,
         version: "native",
       },
       auth: {
