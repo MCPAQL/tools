@@ -27,6 +27,7 @@ const addFormatsFn = require("ajv-formats").default as (ajv: {
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const workspaceRoot = path.resolve(__dirname, "../..");
 const bundlePath = path.join(workspaceRoot, "examples/generated/github-mcp/capture/discovery-bundle.json");
+const playwrightBundlePath = path.join(workspaceRoot, "examples/generated/playwright-mcp/capture/discovery-bundle.json");
 const schemaPath = path.join(workspaceRoot, "spec/schemas/discovery-bundle.schema.json");
 
 test("deepRedact removes token-shaped secrets recursively", () => {
@@ -35,8 +36,8 @@ test("deepRedact removes token-shaped secrets recursively", () => {
     token_command: "gh auth token",
     server_url: "https://example.com/mcp",
     auth: {
-      Authorization: "Bearer ghp_super_secret",
-      nested: ["ghu_example_secret"],
+      Authorization: "Bearer ghu_example_test_token",
+      nested: ["ghu_example_test_token"],
     },
   };
 
@@ -56,6 +57,21 @@ test("deepRedact removes token-shaped secrets recursively", () => {
 test("classifyEndpoint uses safer heuristics for ambiguous and descriptive tools", () => {
   assert.equal(classifyEndpoint({ name: "assign_issue", description: "Assign an issue to a user" }).endpoint, "UPDATE");
   assert.equal(classifyEndpoint({ name: "mystery_action", description: "Deletes the selected branch" }).endpoint, "DELETE");
+  assert.deepEqual(classifyEndpoint({ name: "browser_console_messages", description: "Returns all console messages" }), {
+    endpoint: "READ",
+    confidence: "medium",
+    reviewReasons: ["Description indicates the tool returns observed state without mutating the source."],
+  });
+  assert.deepEqual(classifyEndpoint({ name: "browser_snapshot", description: "Capture accessibility snapshot of the current page" }), {
+    endpoint: "READ",
+    confidence: "medium",
+    reviewReasons: ["Description indicates the tool returns observed state without mutating the source."],
+  });
+  assert.deepEqual(classifyEndpoint({ name: "browser_tabs", description: "List, create, close, or select a browser tab." }), {
+    endpoint: "EXECUTE",
+    confidence: "low",
+    reviewReasons: ["Description mixes list behavior with mutating tab actions."],
+  });
   assert.deepEqual(classifyEndpoint({ name: "mystery_action", description: "" }), {
     endpoint: "EXECUTE",
     confidence: "low",
@@ -99,4 +115,20 @@ test("github discovery bundle validates and preserves provenance-bearing normali
   assert.equal(operation?.endpoint, "UPDATE");
   assert.equal(operation?.provenance.input_schema_present, true);
   assert.equal(operation?.provenance.inference_sources?.endpoint, "heuristic_classification");
+});
+
+test("playwright discovery bundle records auth.type none without bearer defaults", async (t) => {
+  try {
+    await access(playwrightBundlePath);
+  } catch {
+    t.skip("Playwright golden-path fixture is not present in this checkout.");
+    return;
+  }
+
+  const bundle = JSON.parse(await readFile(playwrightBundlePath, "utf8")) as DiscoveryBundle;
+
+  assert.equal(bundle.source.auth.type, "none");
+  assert.equal("header" in bundle.source.auth, false);
+  assert.equal("prefix" in bundle.source.auth, false);
+  assert.equal(bundle.normalized_bundle.operations.length, 21);
 });
