@@ -454,6 +454,9 @@ async function buildAllocation(context: AllocationBuilderContext): Promise<Fixtu
   if (required.has("file")) {
     const file = await createFileFixture(context, "file");
     variables.FIXTURE_FILE_PATH = file.filePath;
+    if (context.task.id === "repo-file-read") {
+      variables.FIXTURE_README_PATH = file.filePath;
+    }
     createdResourceIds.push(file.resourceId);
   }
   if (required.has("deletable_file")) {
@@ -462,9 +465,10 @@ async function buildAllocation(context: AllocationBuilderContext): Promise<Fixtu
     createdResourceIds.push(file.resourceId);
   }
   if (required.has("branch")) {
-    const branch = await createBranchFixture(context, "source");
+    const branch = await createSeededBranchFixture(context, "source");
     variables.FIXTURE_BRANCH = branch.branch;
-    createdResourceIds.push(branch.resourceId);
+    variables.FIXTURE_CHANGED_FILE = branch.changedFile;
+    createdResourceIds.push(...branch.resourceIds);
   }
   if (required.has("pull_request") || required.has("pull_request_review_comment")) {
     const pull = await createPullRequestFixture(context, "pull-request");
@@ -571,6 +575,24 @@ async function createBranchFixture(context: AllocationBuilderContext, kind: stri
   await context.client.createBranch({ owner: context.owner, repo: context.repo, branch, sha: context.baseSha });
   const resource = registerResource(context, "branch", "delete", { branch });
   return { branch, resourceId: resource.id };
+}
+
+async function createSeededBranchFixture(
+  context: AllocationBuilderContext,
+  kind: string,
+): Promise<{ branch: string; changedFile: string; resourceIds: string[] }> {
+  const branch = await createBranchFixture(context, kind);
+  const changedFile = `benchmark/${context.runId}-${kind}.md`;
+  const file = await context.client.createOrUpdateFile({
+    owner: context.owner,
+    repo: context.repo,
+    filePath: changedFile,
+    branch: branch.branch,
+    message: `Seed benchmark branch ${context.runId}`,
+    content: `# Benchmark branch fixture\n\nTask: ${context.task.id}\nRun: ${context.runId}\n`,
+  });
+  const fileResource = registerResource(context, "file", "none", { path: file.path, branch: branch.branch, sha: file.sha });
+  return { branch: branch.branch, changedFile, resourceIds: [branch.resourceId, fileResource.id] };
 }
 
 async function createFileFixture(context: AllocationBuilderContext, kind: string): Promise<{ filePath: string; resourceId: string }> {
@@ -817,6 +839,18 @@ function taskSpecificVerifier(
       return args("search_issues", "search_issues", { ...common, q: `repo:${owner}/${repo} label:benchmark` });
     case "pull-list-open":
       return args("list_pull_requests", "list_pull_requests", { ...common, state: "open" });
+    case "error-pr-reviewer-invalid":
+      return args("pull_request_read", "pull_request_read", {
+        ...common,
+        method: "get",
+        pull_number: Number(variables.FIXTURE_PULL_NUMBER),
+      });
+    case "error-label-add-invalid":
+      return args("issue_read", "issue_read", {
+        ...common,
+        method: "get",
+        issue_number: Number(variables.FIXTURE_ISSUE_NUMBER),
+      }, { expectedTextIncludes: "benchmark" });
     case "repo-get":
       return args("get_repository_tree", "get_repository_tree", { ...common });
     case "repo-branches":

@@ -17,7 +17,7 @@ test("GitHub fixture setup emits exact per-task config run allocations consumed 
   const setupPath = path.join(artifactRoot, "fixtures", "setup.json");
   const teardownPath = path.join(artifactRoot, "fixtures", "teardown.json");
   const metricsPath = path.join(artifactRoot, "metrics-input.json");
-  await writeManifest(manifestPath);
+  await writeManifest(manifestPath, ["issue-close", "pull-create", "release-create-draft"]);
 
   const setup = await setupGitHubBenchmarkFixtures({
     manifestPath,
@@ -68,6 +68,48 @@ test("GitHub fixture setup emits exact per-task config run allocations consumed 
   assert.equal(teardown.errors.length, 0);
   assert.equal(teardown.results.length, setup.createdResources.length);
   await stat(teardownPath);
+});
+
+test("GitHub fixture setup seeds branch fixtures, isolates file reads, and includes verifier identifiers", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "github-llm-fixtures-review-"));
+  const manifestPath = path.join(root, "manifest.json");
+  const artifactRoot = path.join(root, "artifacts", "github-llm-benchmark");
+  const setupPath = path.join(artifactRoot, "fixtures", "setup.json");
+  await writeManifest(manifestPath, [
+    "pull-create",
+    "repo-file-read",
+    "error-pr-reviewer-invalid",
+    "error-label-add-invalid",
+  ]);
+
+  const setup = await setupGitHubBenchmarkFixtures({
+    manifestPath,
+    outputPath: setupPath,
+    artifactRoot,
+    runsPerConfiguration: 1,
+    dryRun: true,
+    owner: "MCPAQL",
+    repo: "fixture-benchmark",
+    assignee: "benchmark-assignee",
+    reviewer: "benchmark-reviewer",
+  });
+
+  const pullCreate = mustFindAllocation(setup.allocations, "pull-create", "raw_mcp");
+  const pullBranch = String(pullCreate.variables.FIXTURE_BRANCH);
+  const pullResources = setup.createdResources.filter((resource) => pullCreate.createdResourceIds.includes(resource.id));
+  assert.ok(pullResources.some((resource) => resource.type === "branch" && resource.metadata.branch === pullBranch));
+  assert.ok(pullResources.some((resource) => resource.type === "file" && resource.metadata.branch === pullBranch));
+
+  const fileRead = mustFindAllocation(setup.allocations, "repo-file-read", "raw_mcp");
+  assert.equal(fileRead.variables.FIXTURE_README_PATH, fileRead.variables.FIXTURE_FILE_PATH);
+
+  for (const configId of ["raw_mcp", "mcpaql_adapted"] as const) {
+    const reviewer = mustFindAllocation(setup.allocations, "error-pr-reviewer-invalid", configId);
+    assert.equal(verifierParams(reviewer).pull_number, reviewer.variables.FIXTURE_PULL_NUMBER);
+
+    const label = mustFindAllocation(setup.allocations, "error-label-add-invalid", configId);
+    assert.equal(verifierParams(label).issue_number, label.variables.FIXTURE_ISSUE_NUMBER);
+  }
 });
 
 test("GitHub benchmark marks failed fixture allocations as task errors", async () => {
@@ -158,6 +200,55 @@ async function writeManifest(manifestPath: string, taskIds?: string[]): Promise<
       inducedError: { enabled: false },
       expectedRawMethod: null,
     },
+    {
+      id: "repo-file-read",
+      taskType: "content_read",
+      prompt: "Read ${FIXTURE_README_PATH}.",
+      expectedFirstTool: {
+        rawMcp: "get_file_contents",
+        mcpaqlAdapted: "mcp_aql_read",
+      },
+      expectedOperation: "get_file_contents",
+      requiresFixture: ["file"],
+      mutation: false,
+      inducedError: { enabled: false },
+      expectedRawMethod: null,
+    },
+    {
+      id: "error-pr-reviewer-invalid",
+      taskType: "recovery_pull_request_update",
+      prompt: "Request review from ${GITHUB_BENCHMARK_REVIEWER} on pull request ${FIXTURE_PULL_NUMBER}.",
+      expectedFirstTool: {
+        rawMcp: "update_pull_request",
+        mcpaqlAdapted: "mcp_aql_update",
+      },
+      expectedOperation: "update_pull_request",
+      requiresFixture: ["pull_request", "reviewer"],
+      mutation: true,
+      inducedError: {
+        enabled: true,
+        errorCode: "INVALID_REVIEWER",
+      },
+      expectedRawMethod: null,
+    },
+    {
+      id: "error-label-add-invalid",
+      taskType: "recovery_issue_update",
+      prompt: "Add the benchmark label to issue ${FIXTURE_ISSUE_NUMBER}.",
+      expectedFirstTool: {
+        rawMcp: "update_issue_labels",
+        mcpaqlAdapted: "mcp_aql_update",
+      },
+      expectedOperation: "issue_write",
+      requiresFixture: ["issue", "label"],
+      mutation: true,
+      inducedError: {
+        enabled: true,
+        errorCode: "INVALID_LABEL",
+      },
+      expectedRawMethod: null,
+      expectedAdaptedMethod: "update",
+    },
   ].filter((task) => !taskIds || taskIds.includes(task.id));
 
   await writeFile(manifestPath, JSON.stringify({
@@ -165,6 +256,37 @@ async function writeManifest(manifestPath: string, taskIds?: string[]): Promise<
     runCountPerConfiguration: 1,
     tasks,
   }, null, 2), "utf8");
+}
+
+function mustFindAllocation(
+  allocations: Array<{
+    taskId: string;
+    configId: string;
+    variables: Record<string, string | number | boolean>;
+    createdResourceIds: string[];
+    completionVerifier?: unknown;
+  }>,
+  taskId: string,
+  configId: string,
+): {
+  taskId: string;
+  configId: string;
+  variables: Record<string, string | number | boolean>;
+  createdResourceIds: string[];
+  completionVerifier?: unknown;
+} {
+  const allocation = allocations.find((entry) => entry.taskId === taskId && entry.configId === configId);
+  assert.ok(allocation, `missing allocation ${taskId} ${configId}`);
+  return allocation;
+}
+
+function verifierParams(allocation: { completionVerifier?: unknown }): Record<string, unknown> {
+  assert.ok(allocation.completionVerifier && typeof allocation.completionVerifier === "object");
+  const verifier = allocation.completionVerifier as { arguments?: unknown };
+  assert.ok(verifier.arguments && typeof verifier.arguments === "object");
+  const args = verifier.arguments as { params?: unknown };
+  if (args.params && typeof args.params === "object") return args.params as Record<string, unknown>;
+  return verifier.arguments as Record<string, unknown>;
 }
 
 class FailingIssueClient implements GitHubFixtureClient {
