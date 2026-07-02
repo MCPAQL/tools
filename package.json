@@ -10,7 +10,8 @@
     "mcpaql-conformance": "./dist/conformance-cli.js",
     "mcpaql-sdef-interrogate": "./dist/sdef-cli.js",
     "mcpaql-parity": "./dist/parity-cli.js",
-    "mcpaql-github-llm-benchmark": "./dist/github-llm-benchmark-cli.js"
+    "mcpaql-github-llm-benchmark": "./dist/github-llm-benchmark-cli.js",
+    "mcpaql-github-llm-fixtures": "./dist/github-llm-fixtures-cli.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
@@ -20,7 +21,8 @@
     "conformance": "tsx src/conformance-cli.ts",
     "sdef-interrogate": "tsx src/sdef-cli.ts",
     "parity": "tsx src/parity-cli.ts",
-    "github-llm-benchmark": "tsx src/github-llm-benchmark-cli.ts"
+    "github-llm-benchmark": "tsx src/github-llm-benchmark-cli.ts",
+    "github-llm-fixtures": "tsx src/github-llm-fixtures-cli.ts"
   },
   "license": "SEE LICENSE IN LICENSE",
   "dependencies": {

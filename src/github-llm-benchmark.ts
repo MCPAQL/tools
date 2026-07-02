@@ -99,12 +99,14 @@ interface FixtureAllocation {
   taskId?: string;
   configId?: LlmMetricConfigId;
   runIndex?: number;
+  status?: "ready" | "error";
   variables?: Record<string, unknown>;
   completionVerifier?: FixtureCompletionVerifier | Partial<Record<LlmMetricConfigId, FixtureCompletionVerifier>>;
   rawDataPaths?: {
     fixtures?: string[];
     other?: string[];
   };
+  error?: string;
 }
 
 interface FixtureCompletionVerifier {
@@ -233,6 +235,23 @@ export async function runGitHubLlmBenchmark(options: GitHubLlmBenchmarkOptions):
         for (let runIndex = 0; runIndex < runsPerConfiguration; runIndex += 1) {
           const runId = `${task.id}-${configId}-${runIndex}`;
           const allocation = findFixtureAllocation(fixtureInput, task.id, configId, runIndex, task.mutation === true);
+          if (allocation?.status === "error") {
+            taskResults.push(await buildFixtureSetupErrorResult({
+              task,
+              configId,
+              runIndex,
+              artifactRoot,
+              configDir,
+              toolDefinitionsPath: toolDefinitionsPaths[configId],
+              fixturePaths: [
+                options.manifestPath,
+                ...(options.fixtureInputPath ? [options.fixtureInputPath] : []),
+                ...(allocation.rawDataPaths?.fixtures ?? []),
+              ],
+              error: allocation.error ?? "Fixture setup failed for this task/configuration/run.",
+            }));
+            continue;
+          }
           const variables = buildPromptVariables(task, configId, runIndex, runId, fixtureInput, allocation, dryRun);
           const prompt = substitutePrompt(task.prompt, variables, dryRun);
           const unresolved = findUnresolvedPlaceholders(prompt);
@@ -295,7 +314,7 @@ export async function runGitHubLlmBenchmark(options: GitHubLlmBenchmarkOptions):
           maxTurns: options.maxTurns ?? DEFAULT_MAX_TURNS,
           fixtureInputPath: options.fixtureInputPath,
           toolDefinitionTokenCounting: dryRun ? "mock-estimate" : "anthropic-count-tokens-minus-baseline",
-          fixtureAllocationContract: "Consumes optional variables/allocations from fixture setup output; fixture creation/reset is reserved for tools#30.",
+          fixtureAllocationContract: "Consumes optional variables/allocations from mcpaql-github-llm-fixtures setup output.",
         },
       },
       configurations: buildConfigurations(artifactRoot, configIds),
@@ -330,6 +349,73 @@ export async function runGitHubLlmBenchmark(options: GitHubLlmBenchmarkOptions):
   } finally {
     await closeClientsQuietly(clients);
   }
+}
+
+async function buildFixtureSetupErrorResult(input: {
+  task: GitHubBenchmarkTask;
+  configId: LlmMetricConfigId;
+  runIndex: number;
+  artifactRoot: string;
+  configDir: string;
+  toolDefinitionsPath: string;
+  fixturePaths: string[];
+  error: string;
+}): Promise<LlmTaskResult> {
+  const timestamp = new Date().toISOString();
+  const fileStem = sanitizeFileStem(`${input.task.id}-${input.configId}-${input.runIndex}`);
+  const transcriptPath = path.join(input.artifactRoot, input.configDir, "transcripts", `${fileStem}.jsonl`);
+  const logPath = path.join(input.artifactRoot, input.configDir, "logs", `${fileStem}.json`);
+  const promptPath = path.join(input.artifactRoot, input.configDir, "prompts", `${fileStem}.txt`);
+  await mkdir(path.dirname(promptPath), { recursive: true });
+  await writeFile(promptPath, `Fixture setup failed before prompt rendering: ${input.error}\n`, "utf8");
+  await appendTranscript(transcriptPath, {
+    type: "fixture_setup_error",
+    taskId: input.task.id,
+    configId: input.configId,
+    runIndex: input.runIndex,
+    error: input.error,
+    fixturePaths: input.fixturePaths,
+  });
+  await writeJsonFile(logPath, {
+    taskId: input.task.id,
+    configId: input.configId,
+    runIndex: input.runIndex,
+    outcome: "error",
+    firstCallSuccess: null,
+    turnsToCompletion: null,
+    tokensToCompletion: null,
+    startedAt: timestamp,
+    finishedAt: timestamp,
+    notes: `Fixture setup failed before model execution: ${input.error}`,
+  });
+  return {
+    taskId: input.task.id,
+    taskName: input.task.id,
+    configId: input.configId,
+    outcome: "error",
+    firstCallSuccess: null,
+    turnsToCompletion: null,
+    tokensToCompletion: null,
+    inducedError: input.task.inducedError?.enabled === true
+      ? {
+        injected: false,
+        recoveredWithinTwoTurns: null,
+        turnsToRecovery: null,
+        errorCode: input.task.inducedError.errorCode,
+        finalOutcome: "not_measured",
+      }
+      : { injected: false, finalOutcome: "not_measured" },
+    rawDataPaths: {
+      transcripts: [transcriptPath],
+      logs: [logPath],
+      prompts: [promptPath],
+      toolDefinitions: [input.toolDefinitionsPath],
+      fixtures: input.fixturePaths,
+    },
+    startedAt: timestamp,
+    finishedAt: timestamp,
+    notes: `Fixture setup failed before model execution: ${input.error}`,
+  };
 }
 
 async function runOneTask(context: RunContext): Promise<LlmTaskResult> {
