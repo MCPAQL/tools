@@ -78,6 +78,10 @@ test("GitHub fixture setup seeds branch fixtures, isolates file reads, and inclu
   await writeManifest(manifestPath, [
     "pull-create",
     "repo-file-read",
+    "issue-comment",
+    "issue-assign",
+    "issue-label-add",
+    "issue-label-remove",
     "error-pr-reviewer-invalid",
     "error-label-add-invalid",
   ]);
@@ -109,6 +113,23 @@ test("GitHub fixture setup seeds branch fixtures, isolates file reads, and inclu
 
     const label = mustFindAllocation(setup.allocations, "error-label-add-invalid", configId);
     assert.equal(verifierParams(label).issue_number, label.variables.FIXTURE_ISSUE_NUMBER);
+
+    const comment = mustFindAllocation(setup.allocations, "issue-comment", configId);
+    assert.equal(verifierOperation(comment), "search_issues");
+    assert.match(String(verifierParams(comment).q), /in:comments/);
+    assert.match(String(verifierExpected(comment, "expectedTextIncludes")), /issue-comment/);
+
+    const assign = mustFindAllocation(setup.allocations, "issue-assign", configId);
+    assert.equal(verifierParams(assign).issue_number, assign.variables.FIXTURE_ISSUE_NUMBER);
+    assert.equal(verifierExpected(assign, "expectedTextIncludes"), assign.variables.GITHUB_BENCHMARK_ASSIGNEE);
+
+    const labelAdd = mustFindAllocation(setup.allocations, "issue-label-add", configId);
+    assert.equal(verifierParams(labelAdd).issue_number, labelAdd.variables.FIXTURE_ISSUE_NUMBER);
+    assert.equal(verifierExpected(labelAdd, "expectedTextIncludes"), "benchmark");
+
+    const labelRemove = mustFindAllocation(setup.allocations, "issue-label-remove", configId);
+    assert.equal(verifierParams(labelRemove).issue_number, labelRemove.variables.FIXTURE_ISSUE_NUMBER);
+    assert.equal(verifierExpected(labelRemove, "expectedTextExcludes"), "needs-review");
   }
 });
 
@@ -167,6 +188,65 @@ async function writeManifest(manifestPath: string, taskIds?: string[]): Promise<
       },
       expectedOperation: "issue_write",
       requiresFixture: ["open_issue"],
+      mutation: true,
+      inducedError: { enabled: false },
+      expectedRawMethod: null,
+      expectedAdaptedMethod: "update",
+    },
+    {
+      id: "issue-comment",
+      taskType: "issue_update",
+      prompt: "Add a comment to issue ${FIXTURE_ISSUE_NUMBER} saying this is a benchmark comment for ${RUN_ID}.",
+      expectedFirstTool: {
+        rawMcp: "add_issue_comment",
+        mcpaqlAdapted: "mcp_aql_create",
+      },
+      expectedOperation: "add_issue_comment",
+      requiresFixture: ["issue"],
+      mutation: true,
+      inducedError: { enabled: false },
+      expectedRawMethod: null,
+    },
+    {
+      id: "issue-assign",
+      taskType: "issue_update",
+      prompt: "Assign issue ${FIXTURE_ISSUE_NUMBER} to ${GITHUB_BENCHMARK_ASSIGNEE}.",
+      expectedFirstTool: {
+        rawMcp: "update_issue_assignees",
+        mcpaqlAdapted: "mcp_aql_update",
+      },
+      expectedOperation: "issue_write",
+      requiresFixture: ["issue", "assignee"],
+      mutation: true,
+      inducedError: { enabled: false },
+      expectedRawMethod: null,
+      expectedAdaptedMethod: "update",
+    },
+    {
+      id: "issue-label-add",
+      taskType: "issue_update",
+      prompt: "Add the benchmark label to issue ${FIXTURE_ISSUE_NUMBER}.",
+      expectedFirstTool: {
+        rawMcp: "update_issue_labels",
+        mcpaqlAdapted: "mcp_aql_update",
+      },
+      expectedOperation: "issue_write",
+      requiresFixture: ["issue", "label"],
+      mutation: true,
+      inducedError: { enabled: false },
+      expectedRawMethod: null,
+      expectedAdaptedMethod: "update",
+    },
+    {
+      id: "issue-label-remove",
+      taskType: "issue_update",
+      prompt: "Remove the needs-review label from issue ${FIXTURE_ISSUE_NUMBER}.",
+      expectedFirstTool: {
+        rawMcp: "update_issue_labels",
+        mcpaqlAdapted: "mcp_aql_update",
+      },
+      expectedOperation: "issue_write",
+      requiresFixture: ["labeled_issue"],
       mutation: true,
       inducedError: { enabled: false },
       expectedRawMethod: null,
@@ -287,6 +367,23 @@ function verifierParams(allocation: { completionVerifier?: unknown }): Record<st
   const args = verifier.arguments as { params?: unknown };
   if (args.params && typeof args.params === "object") return args.params as Record<string, unknown>;
   return verifier.arguments as Record<string, unknown>;
+}
+
+function verifierOperation(allocation: { completionVerifier?: unknown }): string | undefined {
+  assert.ok(allocation.completionVerifier && typeof allocation.completionVerifier === "object");
+  const verifier = allocation.completionVerifier as { arguments?: unknown; toolName?: unknown };
+  if (!verifier.arguments || typeof verifier.arguments !== "object") return typeof verifier.toolName === "string" ? verifier.toolName : undefined;
+  const args = verifier.arguments as { operation?: unknown };
+  return typeof args.operation === "string" ? args.operation : typeof verifier.toolName === "string" ? verifier.toolName : undefined;
+}
+
+function verifierExpected(
+  allocation: { completionVerifier?: unknown },
+  key: "expectedTextIncludes" | "expectedTextExcludes",
+): unknown {
+  assert.ok(allocation.completionVerifier && typeof allocation.completionVerifier === "object");
+  const verifier = allocation.completionVerifier as Record<string, unknown>;
+  return verifier[key];
 }
 
 class FailingIssueClient implements GitHubFixtureClient {

@@ -114,6 +114,7 @@ interface FixtureCompletionVerifier {
   arguments?: Record<string, unknown>;
   expectError?: boolean;
   expectedTextIncludes?: string;
+  expectedTextExcludes?: string;
 }
 
 interface ToolDefinition {
@@ -631,6 +632,9 @@ async function verifyStoppedTaskCompletion(
   const textMatches = verifier.expectedTextIncludes
     ? JSON.stringify(result).includes(verifier.expectedTextIncludes)
     : true;
+  const textExcludes = verifier.expectedTextExcludes
+    ? !JSON.stringify(result).includes(verifier.expectedTextExcludes)
+    : true;
   await appendTranscript(context.transcriptPath, {
     type: "completion_verifier_result",
     taskId: context.task.id,
@@ -638,10 +642,10 @@ async function verifyStoppedTaskCompletion(
     runIndex: context.runIndex,
     verifier: deepRedact(verifier),
     result: deepRedact(result),
-    ok: ok && textMatches,
+    ok: ok && textMatches && textExcludes,
   });
 
-  if (ok && textMatches) {
+  if (ok && textMatches && textExcludes) {
     return { outcome: "completed" };
   }
   return {

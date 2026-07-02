@@ -103,6 +103,7 @@ interface FixtureCompletionVerifier {
   arguments?: Record<string, unknown>;
   expectError?: boolean;
   expectedTextIncludes?: string;
+  expectedTextExcludes?: string;
 }
 
 export interface FixtureResource {
@@ -837,6 +838,30 @@ function taskSpecificVerifier(
       });
     case "issue-search-label":
       return args("search_issues", "search_issues", { ...common, q: `repo:${owner}/${repo} label:benchmark` });
+    case "issue-comment":
+    case "error-issue-comment-wrong-number":
+      return args("search_issues", "search_issues", {
+        ...common,
+        q: `repo:${owner}/${repo} "benchmark ${task.id === "issue-comment" ? "comment" : "recovery"}" "${String(variables.RUN_ID)}" in:comments`,
+      }, { expectedTextIncludes: String(variables.RUN_ID) });
+    case "issue-assign":
+      return args("issue_read", "issue_read", {
+        ...common,
+        method: "get",
+        issue_number: Number(variables.FIXTURE_ISSUE_NUMBER),
+      }, { expectedTextIncludes: String(variables.GITHUB_BENCHMARK_ASSIGNEE) });
+    case "issue-label-add":
+      return args("issue_read", "issue_read", {
+        ...common,
+        method: "get",
+        issue_number: Number(variables.FIXTURE_ISSUE_NUMBER),
+      }, { expectedTextIncludes: "benchmark" });
+    case "issue-label-remove":
+      return args("issue_read", "issue_read", {
+        ...common,
+        method: "get",
+        issue_number: Number(variables.FIXTURE_ISSUE_NUMBER),
+      }, { expectedTextExcludes: "needs-review" });
     case "pull-list-open":
       return args("list_pull_requests", "list_pull_requests", { ...common, state: "open" });
     case "error-pr-reviewer-invalid":
