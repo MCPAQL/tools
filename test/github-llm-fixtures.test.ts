@@ -83,6 +83,7 @@ test("GitHub fixture setup seeds branch fixtures, isolates file reads, and inclu
   await writeManifest(manifestPath, [
     "issue-create-basic",
     "issue-create-with-labels",
+    "issue-close",
     "issue-update-title",
     "pull-comments",
     "pull-create",
@@ -150,6 +151,8 @@ test("GitHub fixture setup seeds branch fixtures, isolates file reads, and inclu
   assert.equal(fileRead.variables.FIXTURE_README_PATH, fileRead.variables.FIXTURE_FILE_PATH);
 
   for (const configId of ["raw_mcp", "mcpaql_adapted"] as const) {
+    const pullNumberKey = configId === "raw_mcp" ? "pullNumber" : "pull_number";
+
     const pullCreateVerifier = mustFindAllocation(setup.allocations, "pull-create", configId);
     assert.equal(verifierParams(pullCreateVerifier).head, `MCPAQL:${String(pullCreateVerifier.variables.FIXTURE_BRANCH)}`);
 
@@ -165,7 +168,7 @@ test("GitHub fixture setup seeds branch fixtures, isolates file reads, and inclu
     assert.equal(verifierExpected(labeledIssueCreate, "expectedTextIncludes"), `Labeled benchmark ${String(labeledIssueCreate.variables.RUN_ID)}`);
 
     const reviewer = mustFindAllocation(setup.allocations, "error-pr-reviewer-invalid", configId);
-    assert.equal(verifierParams(reviewer).pull_number, reviewer.variables.FIXTURE_PULL_NUMBER);
+    assert.equal(verifierParams(reviewer)[pullNumberKey], reviewer.variables.FIXTURE_PULL_NUMBER);
     assert.equal(verifierExpected(reviewer, "expectedTextIncludes"), reviewer.variables.GITHUB_BENCHMARK_REVIEWER);
 
     const label = mustFindAllocation(setup.allocations, "error-label-add-invalid", configId);
@@ -194,6 +197,9 @@ test("GitHub fixture setup seeds branch fixtures, isolates file reads, and inclu
     assert.equal(verifierParams(title).issue_number, title.variables.FIXTURE_ISSUE_NUMBER);
     assert.equal(verifierExpected(title, "expectedTextIncludes"), `Benchmark title ${String(title.variables.RUN_ID)}`);
 
+    const close = mustFindAllocation(setup.allocations, "issue-close", configId);
+    assert.deepEqual(verifierJsonMatches(close), [{ path: "state", value: "closed" }]);
+
     const fileUpdate = mustFindAllocation(setup.allocations, "repo-file-update", configId);
     assert.equal(verifierParams(fileUpdate).path, fileUpdate.variables.FIXTURE_FILE_PATH);
     assert.equal(verifierExpected(fileUpdate, "expectedTextIncludes"), `Benchmark update ${String(fileUpdate.variables.RUN_ID)}`);
@@ -204,38 +210,43 @@ test("GitHub fixture setup seeds branch fixtures, isolates file reads, and inclu
 
     const recoveryComment = mustFindAllocation(setup.allocations, "error-issue-comment-wrong-number", configId);
     assert.match(String(verifierParams(recoveryComment).query), /benchmark recovery/);
-    assert.match(String(verifierParams(recoveryComment).query), new RegExp(String(recoveryComment.variables.FIXTURE_ISSUE_NUMBER)));
+    assert.doesNotMatch(String(verifierParams(recoveryComment).query), new RegExp(String(recoveryComment.variables.FIXTURE_ISSUE_NUMBER)));
     assert.deepEqual(verifierJsonMatches(recoveryComment), [{
       path: "items.*.number",
       value: Number(recoveryComment.variables.FIXTURE_ISSUE_NUMBER),
     }]);
 
+    const updateBranch = mustFindAllocation(setup.allocations, "pull-update-branch", configId);
+    assert.equal(verifierParams(updateBranch).path, updateBranch.variables.FIXTURE_BASE_UPDATE_FILE);
+    assert.equal(verifierParams(updateBranch).branch, updateBranch.variables.FIXTURE_BRANCH);
+    assert.equal(verifierExpected(updateBranch, "expectedTextIncludes"), "Benchmark base update");
+
     const requestReviewers = mustFindAllocation(setup.allocations, "pull-request-reviewers", configId);
-    assert.equal(verifierParams(requestReviewers).pull_number, requestReviewers.variables.FIXTURE_PULL_NUMBER);
+    assert.equal(verifierParams(requestReviewers)[pullNumberKey], requestReviewers.variables.FIXTURE_PULL_NUMBER);
     assert.equal(verifierExpected(requestReviewers, "expectedTextIncludes"), requestReviewers.variables.GITHUB_BENCHMARK_REVIEWER);
 
     const pullComments = mustFindAllocation(setup.allocations, "pull-comments", configId);
     const commentResources = setup.createdResources.filter((resource) => pullComments.createdResourceIds.includes(resource.id));
     assert.ok(commentResources.some((resource) => resource.type === "pull_request_review_comment"));
-    assert.equal(verifierParams(pullComments).pull_number, pullComments.variables.FIXTURE_PULL_NUMBER);
+    assert.equal(verifierParams(pullComments)[pullNumberKey], pullComments.variables.FIXTURE_PULL_NUMBER);
     assert.equal(verifierParams(pullComments).method, "get_review_comments");
     assert.equal(verifierExpected(pullComments, "expectedTextIncludes"), `Benchmark review comment ${String(pullComments.variables.RUN_ID)}`);
 
     const pullMergeVerifier = mustFindAllocation(setup.allocations, "pull-merge", configId);
-    assert.equal(verifierParams(pullMergeVerifier).pull_number, pullMergeVerifier.variables.FIXTURE_MERGEABLE_PULL_NUMBER);
+    assert.equal(verifierParams(pullMergeVerifier)[pullNumberKey], pullMergeVerifier.variables.FIXTURE_MERGEABLE_PULL_NUMBER);
     assert.deepEqual(verifierJsonMatches(pullMergeVerifier), [{ path: "merged", value: true }]);
 
     const reviewComment = mustFindAllocation(setup.allocations, "pull-add-review-comment", configId);
     const reviewCommentResources = setup.createdResources.filter((resource) => reviewComment.createdResourceIds.includes(resource.id));
     assert.ok(reviewCommentResources.some((resource) => resource.type === "pending_review" && resource.teardown === "delete"));
-    assert.equal(verifierParams(reviewComment).pull_number, reviewComment.variables.FIXTURE_PULL_NUMBER);
+    assert.equal(verifierParams(reviewComment)[pullNumberKey], reviewComment.variables.FIXTURE_PULL_NUMBER);
     assert.equal(verifierParams(reviewComment).method, "get_review_comments");
     assert.equal(verifierExpected(reviewComment, "expectedTextIncludes"), `Benchmark review comment ${String(reviewComment.variables.RUN_ID)}`);
 
     const submitReview = mustFindAllocation(setup.allocations, "pull-submit-review", configId);
     const submitReviewResources = setup.createdResources.filter((resource) => submitReview.createdResourceIds.includes(resource.id));
     assert.ok(submitReviewResources.some((resource) => resource.type === "pending_review" && resource.teardown === "delete"));
-    assert.equal(verifierParams(submitReview).pull_number, submitReview.variables.FIXTURE_PULL_NUMBER);
+    assert.equal(verifierParams(submitReview)[pullNumberKey], submitReview.variables.FIXTURE_PULL_NUMBER);
     assert.equal(verifierParams(submitReview).method, "get_reviews");
     assert.equal(verifierExpected(submitReview, "expectedTextIncludes"), `Pending benchmark review for ${String(submitReview.variables.RUN_ID)}`);
   }

@@ -500,6 +500,7 @@ async function buildAllocation(context: AllocationBuilderContext): Promise<Fixtu
     variables.FIXTURE_PULL_NUMBER = pull.pullNumber;
     variables.FIXTURE_BRANCH = pull.branch;
     variables.FIXTURE_CHANGED_FILE = pull.changedFile;
+    if (pull.baseUpdateFile) variables.FIXTURE_BASE_UPDATE_FILE = pull.baseUpdateFile;
     createdResourceIds.push(...pull.resourceIds);
     if (required.has("pull_request_review_comment")) {
       const reviewComment = await createPullRequestReviewCommentFixture(context, pull.pullNumber, pull.branch, pull.changedFile);
@@ -512,6 +513,7 @@ async function buildAllocation(context: AllocationBuilderContext): Promise<Fixtu
     variables.FIXTURE_PULL_NUMBER = pull.pullNumber;
     variables.FIXTURE_BRANCH = pull.branch;
     variables.FIXTURE_CHANGED_FILE = pull.changedFile;
+    if (pull.baseUpdateFile) variables.FIXTURE_BASE_UPDATE_FILE = pull.baseUpdateFile;
     createdResourceIds.push(...pull.resourceIds);
   }
   if (required.has("pending_review")) {
@@ -522,6 +524,7 @@ async function buildAllocation(context: AllocationBuilderContext): Promise<Fixtu
       variables.FIXTURE_PULL_NUMBER = pull.pullNumber;
       variables.FIXTURE_BRANCH = pull.branch;
       variables.FIXTURE_CHANGED_FILE = pull.changedFile;
+      if (pull.baseUpdateFile) variables.FIXTURE_BASE_UPDATE_FILE = pull.baseUpdateFile;
       createdResourceIds.push(...pull.resourceIds);
     }
     const review = await createPendingReviewFixture(context, Number(variables.FIXTURE_PULL_NUMBER));
@@ -532,6 +535,7 @@ async function buildAllocation(context: AllocationBuilderContext): Promise<Fixtu
     variables.FIXTURE_PULL_NUMBER = pull.pullNumber;
     variables.FIXTURE_BRANCH = pull.branch;
     variables.FIXTURE_CHANGED_FILE = pull.changedFile;
+    if (pull.baseUpdateFile) variables.FIXTURE_BASE_UPDATE_FILE = pull.baseUpdateFile;
     createdResourceIds.push(...pull.resourceIds);
   }
   if (required.has("release")) {
@@ -646,7 +650,7 @@ async function createFileFixture(context: AllocationBuilderContext, kind: string
 async function createPullRequestFixture(
   context: AllocationBuilderContext,
   kind: string,
-): Promise<{ pullNumber: number; branch: string; changedFile: string; resourceIds: string[] }> {
+): Promise<{ pullNumber: number; branch: string; changedFile: string; baseUpdateFile?: string; resourceIds: string[] }> {
   const branch = await createBranchFixture(context, kind);
   const changedFile = `benchmark/${context.runId}-${kind}.md`;
   const file = await context.client.createOrUpdateFile({
@@ -672,14 +676,17 @@ async function createPullRequestFixture(
     url: pull.url ?? "",
   });
   const resourceIds = [branch.resourceId, fileResource.id, pullResource.id];
+  let baseUpdateFile: string | undefined;
   if (context.task.id === "pull-update-branch") {
     const baseUpdate = await createBaseUpdateFixture(context);
+    baseUpdateFile = baseUpdate.filePath;
     resourceIds.push(baseUpdate.resourceId);
   }
   return {
     pullNumber: pull.number,
     branch: branch.branch,
     changedFile,
+    baseUpdateFile,
     resourceIds,
   };
 }
@@ -832,6 +839,7 @@ function buildCompletionVerifier(
   const pullNumber = Number(variables.FIXTURE_PULL_NUMBER ?? variables.FIXTURE_MERGEABLE_PULL_NUMBER);
   const filePath = String(variables.FIXTURE_FILE_PATH ?? variables.FIXTURE_DELETE_FILE_PATH ?? `benchmark/${variables.RUN_ID ?? ""}.md`);
   const branch = String(variables.FIXTURE_BRANCH ?? `benchmark-${variables.RUN_ID ?? ""}`);
+  const baseUpdateFile = String(variables.FIXTURE_BASE_UPDATE_FILE ?? `benchmark/${variables.RUN_ID ?? ""}-base-update.md`);
   const tag = String(variables.FIXTURE_TAG ?? "");
 
   let operation = task.expectedOperation;
@@ -861,8 +869,8 @@ function buildCompletionVerifier(
     rawTool = "issue_read";
     params = { ...common, method: "get", issue_number: issueNumber };
     rawArgs = params;
-    if (task.id === "issue-close") verifierExtra = { expectedTextIncludes: "closed" };
-    if (task.id === "issue-reopen") verifierExtra = { expectedTextIncludes: "open" };
+    if (task.id === "issue-close") verifierExtra = { expectedJsonMatches: [{ path: "state", value: "closed" }] };
+    if (task.id === "issue-reopen") verifierExtra = { expectedJsonMatches: [{ path: "state", value: "open" }] };
     if (task.id === "issue-update-title") verifierExtra = { expectedTextIncludes: expectedUpdatedIssueTitle(String(variables.RUN_ID ?? "")) };
   } else if (task.id === "pull-create") {
     operation = "list_pull_requests";
@@ -870,15 +878,22 @@ function buildCompletionVerifier(
     params = { ...common, state: "open", head: pullHeadFilter(owner, branch) };
     rawArgs = params;
     verifierExtra = { expectedTextIncludes: String(variables.RUN_ID ?? "") };
+  } else if (task.id === "pull-update-branch") {
+    operation = "get_file_contents";
+    rawTool = "get_file_contents";
+    params = { ...common, path: baseUpdateFile, branch };
+    rawArgs = params;
+    verifierExtra = { expectedTextIncludes: "Benchmark base update" };
   } else if (task.id.includes("pull") && Number.isFinite(pullNumber)) {
+    const pullReadMethod = task.expectedRawMethod ?? task.expectedAdaptedMethod ?? (task.id === "pull-comments" ? "get_review_comments" : "get");
     operation = "pull_request_read";
     rawTool = "pull_request_read";
     params = {
       ...common,
-      method: task.id === "pull-comments" ? "get_review_comments" : "get",
+      method: pullReadMethod,
       pull_number: pullNumber,
     };
-    rawArgs = params;
+    rawArgs = { ...common, method: pullReadMethod, pullNumber };
     if (task.id === "pull-comments") verifierExtra = { expectedTextIncludes: expectedReviewComment(String(variables.RUN_ID ?? "")) };
     if (task.id === "pull-merge") verifierExtra = { expectedJsonMatches: [{ path: "merged", value: true }] };
   } else if (task.id === "branch-create" || task.id === "error-branch-create-existing") {
@@ -941,7 +956,7 @@ function taskSpecificVerifier(
         ...common,
         query: task.id === "issue-comment"
           ? `repo:${owner}/${repo} "benchmark comment" "${String(variables.RUN_ID)}" in:comments`
-          : `repo:${owner}/${repo} is:issue ${String(variables.FIXTURE_ISSUE_NUMBER)} "benchmark recovery" in:comments`,
+          : `repo:${owner}/${repo} "benchmark recovery" in:comments`,
       }, task.id === "issue-comment"
         ? { expectedTextIncludes: String(variables.RUN_ID) }
         : { expectedJsonMatches: [{ path: "items.*.number", value: Number(variables.FIXTURE_ISSUE_NUMBER) }] });
@@ -967,25 +982,41 @@ function taskSpecificVerifier(
         ...common,
         method: "get",
         pull_number: Number(variables.FIXTURE_PULL_NUMBER),
-      }, { expectedTextIncludes: String(variables.GITHUB_BENCHMARK_REVIEWER) });
+      }, { expectedTextIncludes: String(variables.GITHUB_BENCHMARK_REVIEWER) }, {
+        ...common,
+        method: "get",
+        pullNumber: Number(variables.FIXTURE_PULL_NUMBER),
+      });
     case "pull-add-review-comment":
       return args("pull_request_read", "pull_request_read", {
         ...common,
         method: "get_review_comments",
         pull_number: Number(variables.FIXTURE_PULL_NUMBER),
-      }, { expectedTextIncludes: expectedReviewComment(String(variables.RUN_ID)) });
+      }, { expectedTextIncludes: expectedReviewComment(String(variables.RUN_ID)) }, {
+        ...common,
+        method: "get_review_comments",
+        pullNumber: Number(variables.FIXTURE_PULL_NUMBER),
+      });
     case "pull-submit-review":
       return args("pull_request_read", "pull_request_read", {
         ...common,
         method: "get_reviews",
         pull_number: Number(variables.FIXTURE_PULL_NUMBER),
-      }, { expectedTextIncludes: `Pending benchmark review for ${String(variables.RUN_ID)}` });
+      }, { expectedTextIncludes: `Pending benchmark review for ${String(variables.RUN_ID)}` }, {
+        ...common,
+        method: "get_reviews",
+        pullNumber: Number(variables.FIXTURE_PULL_NUMBER),
+      });
     case "error-pr-reviewer-invalid":
       return args("pull_request_read", "pull_request_read", {
         ...common,
         method: "get",
         pull_number: Number(variables.FIXTURE_PULL_NUMBER),
-      }, { expectedTextIncludes: String(variables.GITHUB_BENCHMARK_REVIEWER) });
+      }, { expectedTextIncludes: String(variables.GITHUB_BENCHMARK_REVIEWER) }, {
+        ...common,
+        method: "get",
+        pullNumber: Number(variables.FIXTURE_PULL_NUMBER),
+      });
     case "error-label-add-invalid":
       return args("search_issues", "search_issues", {
         ...common,
@@ -1031,6 +1062,7 @@ function args(
   rawTool: string,
   values: Record<string, unknown>,
   extra?: Partial<FixtureCompletionVerifier>,
+  rawValues?: Record<string, unknown>,
 ): {
   operation: string;
   params: Record<string, unknown>;
@@ -1042,7 +1074,7 @@ function args(
     operation,
     params: values,
     rawTool,
-    rawArgs: values,
+    rawArgs: rawValues ?? values,
     extra,
   };
 }

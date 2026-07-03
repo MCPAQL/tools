@@ -225,10 +225,17 @@ test("GitHub LLM benchmark completion verifier checks parsed MCP text JSON", () 
   );
   assert.equal(
     completionVerifierResultMatches(
-      { content: [{ type: "text", text: JSON.stringify({ items: [{ number: 47 }] }) }] },
+      { content: [{ type: "text", text: JSON.stringify({ items: [{ number: 47, body: "benchmark recovery note" }] }) }] },
       { expectedJsonMatches: [{ path: "items.*.number", value: 47 }] },
     ),
     true,
+  );
+  assert.equal(
+    completionVerifierResultMatches(
+      { content: [{ type: "text", text: JSON.stringify({ items: [{ number: 48, body: "benchmark recovery note" }] }) }] },
+      { expectedJsonMatches: [{ path: "items.*.number", value: 47 }] },
+    ),
+    false,
   );
 });
 
