@@ -833,7 +833,7 @@ function buildCompletionVerifier(
   } else if (task.id === "pull-create") {
     operation = "list_pull_requests";
     rawTool = "list_pull_requests";
-    params = { ...common, state: "open", head: branch };
+    params = { ...common, state: "open", head: pullHeadFilter(owner, branch) };
     rawArgs = params;
     verifierExtra = { expectedTextIncludes: String(variables.RUN_ID ?? "") };
   } else if (task.id.includes("pull") && Number.isFinite(pullNumber)) {
@@ -1036,6 +1036,10 @@ function expectedFileRecoveryLine(runId: string): string {
 
 function expectedReviewComment(runId: string): string {
   return `Benchmark review comment ${runId}`;
+}
+
+function pullHeadFilter(owner: string, branch: string): string {
+  return `${owner}:${branch}`;
 }
 
 function endpointForOperation(task: GitHubBenchmarkTask, operation: string): string {

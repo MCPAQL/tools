@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
+import { execFile as execFileCallback } from "node:child_process";
 import { mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { tmpdir } from "node:os";
 import test from "node:test";
+import { promisify } from "node:util";
 import {
   GITHUB_FIXTURE_SCHEMA_VERSION,
   setupGitHubBenchmarkFixtures,
@@ -10,6 +12,8 @@ import {
   type GitHubFixtureClient,
 } from "../src/github-llm-fixtures.js";
 import { runGitHubLlmBenchmark } from "../src/github-llm-benchmark.js";
+
+const execFile = promisify(execFileCallback);
 
 test("GitHub fixture setup emits exact per-task config run allocations consumed by the runner", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "github-llm-fixtures-"));
@@ -128,6 +132,9 @@ test("GitHub fixture setup seeds branch fixtures, isolates file reads, and inclu
   assert.equal(fileRead.variables.FIXTURE_README_PATH, fileRead.variables.FIXTURE_FILE_PATH);
 
   for (const configId of ["raw_mcp", "mcpaql_adapted"] as const) {
+    const pullCreateVerifier = mustFindAllocation(setup.allocations, "pull-create", configId);
+    assert.equal(verifierParams(pullCreateVerifier).head, `MCPAQL:${String(pullCreateVerifier.variables.FIXTURE_BRANCH)}`);
+
     const issueCreate = mustFindAllocation(setup.allocations, "issue-create-basic", configId);
     assert.match(String(verifierParams(issueCreate).query), /in:title/);
     assert.doesNotMatch(String(verifierParams(issueCreate).query), /label:benchmark/);
@@ -309,6 +316,48 @@ test("GitHub fixture teardown skips pending review delete after the review was s
     ["pending-review-1", "skipped"],
     ["pull-1", "ok"],
   ]);
+});
+
+test("GitHub fixtures CLI preserves dry-run setup mode when teardown flag is omitted", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "github-llm-fixtures-cli-"));
+  const manifestPath = path.join(root, "manifest.json");
+  const artifactRoot = path.join(root, "artifacts", "github-llm-benchmark");
+  const setupPath = path.join(artifactRoot, "fixtures", "setup.json");
+  const teardownPath = path.join(artifactRoot, "fixtures", "teardown.json");
+  await writeManifest(manifestPath, ["issue-close"]);
+
+  await execFile(process.execPath, [
+    "--import",
+    "tsx",
+    "src/github-llm-fixtures-cli.ts",
+    "setup",
+    "--dry-run",
+    "--manifest",
+    manifestPath,
+    "--artifact-root",
+    artifactRoot,
+    "--output",
+    setupPath,
+    "--config",
+    "raw_mcp",
+  ]);
+
+  await execFile(process.execPath, [
+    "--import",
+    "tsx",
+    "src/github-llm-fixtures-cli.ts",
+    "teardown",
+    "--setup",
+    setupPath,
+    "--output",
+    teardownPath,
+  ], {
+    env: { ...process.env, GITHUB_PERSONAL_ACCESS_TOKEN: "" },
+  });
+
+  const teardown = JSON.parse(await readFile(teardownPath, "utf8")) as { mode: string; errors: unknown[] };
+  assert.equal(teardown.mode, "dry-run");
+  assert.equal(teardown.errors.length, 0);
 });
 
 async function writeManifest(manifestPath: string, taskIds?: string[]): Promise<void> {

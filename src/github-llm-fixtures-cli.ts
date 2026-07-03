@@ -65,7 +65,7 @@ async function main(): Promise<void> {
     return;
   }
   const command = process.argv[2];
-  const dryRun = process.argv.includes("--dry-run");
+  const dryRunRequested = process.argv.includes("--dry-run");
   const continueOnError = process.argv.includes("--continue-on-error");
 
   if (command === "setup") {
@@ -76,7 +76,7 @@ async function main(): Promise<void> {
       artifactRoot: arg("artifact-root") ?? "artifacts/github-llm-benchmark",
       runsPerConfiguration: parsePositiveIntegerArg("runs"),
       configIds: parseConfigIds(),
-      dryRun,
+      dryRun: dryRunRequested,
       owner: arg("owner"),
       repo: arg("repo"),
       assignee: arg("assignee"),
@@ -87,7 +87,7 @@ async function main(): Promise<void> {
     console.log("[github-llm-fixtures] setup:", outputPath);
     console.log("[github-llm-fixtures] allocations:", setup.allocations.length);
     console.log("[github-llm-fixtures] created resources:", setup.createdResources.length);
-    if (dryRun) console.log("[github-llm-fixtures] dry run: synthetic fixture data only; not benchmark evidence");
+    if (dryRunRequested) console.log("[github-llm-fixtures] dry run: synthetic fixture data only; not benchmark evidence");
     if (setup.errors.length > 0) {
       console.log("[github-llm-fixtures] setup errors:", setup.errors.length);
       process.exitCode = 1;
@@ -100,12 +100,12 @@ async function main(): Promise<void> {
     const teardown = await teardownGitHubBenchmarkFixtures({
       setupPath: resolve(arg("setup") ?? "artifacts/github-llm-benchmark/fixtures/setup.json"),
       outputPath,
-      dryRun,
+      dryRun: dryRunRequested ? true : undefined,
       continueOnError,
     });
     console.log("[github-llm-fixtures] teardown:", outputPath);
     console.log("[github-llm-fixtures] resources:", teardown.results.length);
-    if (dryRun) console.log("[github-llm-fixtures] dry run: no GitHub resources were changed");
+    if (teardown.mode === "dry-run") console.log("[github-llm-fixtures] dry run: no GitHub resources were changed");
     if (teardown.errors.length > 0) {
       console.log("[github-llm-fixtures] teardown errors:", teardown.errors.length);
       process.exitCode = 1;
