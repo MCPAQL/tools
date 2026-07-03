@@ -175,6 +175,7 @@ export interface GitHubFixtureClient {
   createPullRequestReviewComment(input: CreatePullRequestReviewCommentInput): Promise<{ id: number }>;
   deletePullRequestReviewComment(owner: string, repo: string, commentId: number): Promise<void>;
   createPendingReview(input: CreatePendingReviewInput): Promise<{ id: number }>;
+  getPullRequestReview(owner: string, repo: string, pullNumber: number, reviewId: number): Promise<{ state: string } | undefined>;
   deletePendingReview(owner: string, repo: string, pullNumber: number, reviewId: number): Promise<void>;
   createRelease(input: CreateReleaseInput): Promise<{ id: number; tagName: string }>;
   deleteRelease(owner: string, repo: string, releaseId: number): Promise<void>;
@@ -1106,6 +1107,16 @@ async function teardownResource(client: GitHubFixtureClient, resource: FixtureRe
     return { resourceId: resource.id, type: resource.type, action, status: "ok" };
   }
   if (resource.type === "pending_review" && typeof meta.pullNumber === "number" && typeof meta.reviewId === "number") {
+    const review = await client.getPullRequestReview(resource.owner, resource.repo, meta.pullNumber, meta.reviewId);
+    if (review === undefined || review.state.toUpperCase() !== "PENDING") {
+      return {
+        resourceId: resource.id,
+        type: resource.type,
+        action,
+        status: "skipped",
+        message: review === undefined ? "Pending review no longer exists." : `Review is already ${review.state}.`,
+      };
+    }
     await client.deletePendingReview(resource.owner, resource.repo, meta.pullNumber, meta.reviewId);
     return { resourceId: resource.id, type: resource.type, action, status: "ok" };
   }
@@ -1239,6 +1250,10 @@ class DryRunGitHubFixtureClient implements GitHubFixtureClient {
   async createPendingReview(): Promise<{ id: number }> {
     this.reviewId += 1;
     return { id: this.reviewId };
+  }
+
+  async getPullRequestReview(): Promise<{ state: string } | undefined> {
+    return { state: "PENDING" };
   }
 
   async deletePendingReview(): Promise<void> {}
@@ -1383,6 +1398,16 @@ class RestGitHubFixtureClient implements GitHubFixtureClient {
       body: input.body,
     });
     return { id: data.id };
+  }
+
+  async getPullRequestReview(owner: string, repo: string, pullNumber: number, reviewId: number): Promise<{ state: string } | undefined> {
+    try {
+      const data = await this.request<{ state: string }>("GET", `/repos/${owner}/${repo}/pulls/${pullNumber}/reviews/${reviewId}`);
+      return { state: data.state };
+    } catch (error) {
+      if (isHttpNotFound(error)) return undefined;
+      throw error;
+    }
   }
 
   async deletePendingReview(owner: string, repo: string, pullNumber: number, reviewId: number): Promise<void> {

@@ -4,6 +4,7 @@ import path from "node:path";
 import { tmpdir } from "node:os";
 import test from "node:test";
 import {
+  GITHUB_FIXTURE_SCHEMA_VERSION,
   setupGitHubBenchmarkFixtures,
   teardownGitHubBenchmarkFixtures,
   type GitHubFixtureClient,
@@ -249,6 +250,65 @@ test("GitHub benchmark marks failed fixture allocations as task errors", async (
 
   const writtenSetup = JSON.parse(await readFile(setupPath, "utf8")) as { errors: unknown[] };
   assert.equal(writtenSetup.errors.length, 1);
+});
+
+test("GitHub fixture teardown skips pending review delete after the review was submitted", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "github-llm-fixtures-teardown-"));
+  const setupPath = path.join(root, "setup.json");
+  const teardownPath = path.join(root, "teardown.json");
+  const client = new SubmittedReviewTeardownClient();
+
+  await writeFile(setupPath, JSON.stringify({
+    schemaVersion: GITHUB_FIXTURE_SCHEMA_VERSION,
+    suite: "github-mcp",
+    generatedAt: "2026-07-03T08:00:00.000Z",
+    owner: "MCPAQL",
+    repo: "fixture-benchmark",
+    mode: "live",
+    manifestPath: path.join(root, "manifest.json"),
+    artifactRoot: root,
+    runCountPerConfiguration: 1,
+    configurations: ["raw_mcp"],
+    variables: {},
+    allocations: [],
+    createdResources: [
+      {
+        id: "pull-1",
+        type: "pull_request",
+        owner: "MCPAQL",
+        repo: "fixture-benchmark",
+        createdAt: "2026-07-03T08:00:00.000Z",
+        teardown: "close",
+        metadata: { number: 42 },
+      },
+      {
+        id: "pending-review-1",
+        type: "pending_review",
+        owner: "MCPAQL",
+        repo: "fixture-benchmark",
+        createdAt: "2026-07-03T08:00:00.000Z",
+        teardown: "delete",
+        metadata: { pullNumber: 42, reviewId: 99 },
+      },
+    ],
+    errors: [],
+    notes: "",
+  }, null, 2), "utf8");
+
+  const teardown = await teardownGitHubBenchmarkFixtures({
+    setupPath,
+    outputPath: teardownPath,
+    dryRun: false,
+    client,
+  });
+
+  assert.equal(teardown.errors.length, 0);
+  assert.equal(client.deletePendingReviewCalls, 0);
+  assert.equal(client.closedPullRequests, 1);
+  assert.deepEqual(teardown.results.map((result) => [result.resourceId, result.status]), [
+    ["pending-review-1", "skipped"],
+    ["pull-1", "ok"],
+  ]);
 });
 
 async function writeManifest(manifestPath: string, taskIds?: string[]): Promise<void> {
@@ -669,6 +729,12 @@ class FailingIssueClient implements GitHubFixtureClient {
     return { id: 1 };
   }
 
+  async getPullRequestReview(): Promise<{ state: string } | undefined> {
+    return { state: "PENDING" };
+  }
+
+  async deletePendingReview(): Promise<void> {}
+
   async createRelease(input: { tag: string }): Promise<{ id: number; tagName: string }> {
     return { id: 1, tagName: input.tag };
   }
@@ -679,5 +745,23 @@ class FailingIssueClient implements GitHubFixtureClient {
 
   async findIssue(): Promise<{ number: number } | undefined> {
     return undefined;
+  }
+}
+
+class SubmittedReviewTeardownClient extends FailingIssueClient {
+  deletePendingReviewCalls = 0;
+  closedPullRequests = 0;
+
+  async getPullRequestReview(): Promise<{ state: string } | undefined> {
+    return { state: "COMMENTED" };
+  }
+
+  async deletePendingReview(): Promise<void> {
+    this.deletePendingReviewCalls += 1;
+    throw new Error("already-submitted reviews should not be deleted");
+  }
+
+  async closePullRequest(): Promise<void> {
+    this.closedPullRequests += 1;
   }
 }
