@@ -128,14 +128,14 @@ test("GitHub fixture setup seeds branch fixtures, isolates file reads, and inclu
 
   for (const configId of ["raw_mcp", "mcpaql_adapted"] as const) {
     const issueCreate = mustFindAllocation(setup.allocations, "issue-create-basic", configId);
-    assert.match(String(verifierParams(issueCreate).q), /in:title/);
-    assert.doesNotMatch(String(verifierParams(issueCreate).q), /label:benchmark/);
+    assert.match(String(verifierParams(issueCreate).query), /in:title/);
+    assert.doesNotMatch(String(verifierParams(issueCreate).query), /label:benchmark/);
     assert.equal(verifierExpected(issueCreate, "expectedTextIncludes"), `Benchmark issue ${String(issueCreate.variables.RUN_ID)}`);
 
     const labeledIssueCreate = mustFindAllocation(setup.allocations, "issue-create-with-labels", configId);
-    assert.match(String(verifierParams(labeledIssueCreate).q), /in:title/);
-    assert.match(String(verifierParams(labeledIssueCreate).q), /label:benchmark/);
-    assert.match(String(verifierParams(labeledIssueCreate).q), /label:documentation/);
+    assert.match(String(verifierParams(labeledIssueCreate).query), /in:title/);
+    assert.match(String(verifierParams(labeledIssueCreate).query), /label:benchmark/);
+    assert.match(String(verifierParams(labeledIssueCreate).query), /label:documentation/);
     assert.equal(verifierExpected(labeledIssueCreate, "expectedTextIncludes"), `Labeled benchmark ${String(labeledIssueCreate.variables.RUN_ID)}`);
 
     const reviewer = mustFindAllocation(setup.allocations, "error-pr-reviewer-invalid", configId);
@@ -143,25 +143,25 @@ test("GitHub fixture setup seeds branch fixtures, isolates file reads, and inclu
     assert.equal(verifierExpected(reviewer, "expectedTextIncludes"), reviewer.variables.GITHUB_BENCHMARK_REVIEWER);
 
     const label = mustFindAllocation(setup.allocations, "error-label-add-invalid", configId);
-    assert.match(String(verifierParams(label).q), /label:benchmark/);
+    assert.match(String(verifierParams(label).query), /label:benchmark/);
     assert.equal(verifierExpected(label, "expectedTextIncludes"), label.variables.RUN_ID);
 
     const comment = mustFindAllocation(setup.allocations, "issue-comment", configId);
     assert.equal(verifierOperation(comment), "search_issues");
-    assert.match(String(verifierParams(comment).q), /in:comments/);
+    assert.match(String(verifierParams(comment).query), /in:comments/);
     assert.match(String(verifierExpected(comment, "expectedTextIncludes")), /issue-comment/);
 
     const assign = mustFindAllocation(setup.allocations, "issue-assign", configId);
-    assert.match(String(verifierParams(assign).q), new RegExp(`assignee:${String(assign.variables.GITHUB_BENCHMARK_ASSIGNEE)}`));
+    assert.match(String(verifierParams(assign).query), new RegExp(`assignee:${String(assign.variables.GITHUB_BENCHMARK_ASSIGNEE)}`));
     assert.equal(verifierExpected(assign, "expectedTextIncludes"), assign.variables.RUN_ID);
 
     const labelAdd = mustFindAllocation(setup.allocations, "issue-label-add", configId);
-    assert.match(String(verifierParams(labelAdd).q), /label:benchmark/);
+    assert.match(String(verifierParams(labelAdd).query), /label:benchmark/);
     assert.equal(verifierExpected(labelAdd, "expectedTextIncludes"), labelAdd.variables.RUN_ID);
 
     const labelRemove = mustFindAllocation(setup.allocations, "issue-label-remove", configId);
-    assert.match(String(verifierParams(labelRemove).q), /label:benchmark/);
-    assert.match(String(verifierParams(labelRemove).q), /-label:needs-review/);
+    assert.match(String(verifierParams(labelRemove).query), /label:benchmark/);
+    assert.match(String(verifierParams(labelRemove).query), /-label:needs-review/);
     assert.equal(verifierExpected(labelRemove, "expectedTextIncludes"), labelRemove.variables.RUN_ID);
 
     const title = mustFindAllocation(setup.allocations, "issue-update-title", configId);
@@ -177,8 +177,8 @@ test("GitHub fixture setup seeds branch fixtures, isolates file reads, and inclu
     assert.equal(verifierExpected(fileRecovery, "expectedTextIncludes"), `Benchmark recovery ${String(fileRecovery.variables.RUN_ID)}`);
 
     const recoveryComment = mustFindAllocation(setup.allocations, "error-issue-comment-wrong-number", configId);
-    assert.match(String(verifierParams(recoveryComment).q), /benchmark recovery/);
-    assert.doesNotMatch(String(verifierParams(recoveryComment).q), new RegExp(String(recoveryComment.variables.RUN_ID)));
+    assert.match(String(verifierParams(recoveryComment).query), /benchmark recovery/);
+    assert.doesNotMatch(String(verifierParams(recoveryComment).query), new RegExp(String(recoveryComment.variables.RUN_ID)));
     assert.equal(verifierExpected(recoveryComment, "expectedTextIncludes"), "benchmark recovery");
 
     const requestReviewers = mustFindAllocation(setup.allocations, "pull-request-reviewers", configId);
@@ -193,11 +193,15 @@ test("GitHub fixture setup seeds branch fixtures, isolates file reads, and inclu
     assert.equal(verifierExpected(pullComments, "expectedTextIncludes"), `Benchmark review comment ${String(pullComments.variables.RUN_ID)}`);
 
     const reviewComment = mustFindAllocation(setup.allocations, "pull-add-review-comment", configId);
+    const reviewCommentResources = setup.createdResources.filter((resource) => reviewComment.createdResourceIds.includes(resource.id));
+    assert.ok(reviewCommentResources.some((resource) => resource.type === "pending_review" && resource.teardown === "delete"));
     assert.equal(verifierParams(reviewComment).pull_number, reviewComment.variables.FIXTURE_PULL_NUMBER);
     assert.equal(verifierParams(reviewComment).method, "get_review_comments");
     assert.equal(verifierExpected(reviewComment, "expectedTextIncludes"), `Benchmark review comment ${String(reviewComment.variables.RUN_ID)}`);
 
     const submitReview = mustFindAllocation(setup.allocations, "pull-submit-review", configId);
+    const submitReviewResources = setup.createdResources.filter((resource) => submitReview.createdResourceIds.includes(resource.id));
+    assert.ok(submitReviewResources.some((resource) => resource.type === "pending_review" && resource.teardown === "delete"));
     assert.equal(verifierParams(submitReview).pull_number, submitReview.variables.FIXTURE_PULL_NUMBER);
     assert.equal(verifierParams(submitReview).method, "get_reviews");
     assert.equal(verifierExpected(submitReview, "expectedTextIncludes"), `Pending benchmark review for ${String(submitReview.variables.RUN_ID)}`);

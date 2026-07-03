@@ -175,6 +175,7 @@ export interface GitHubFixtureClient {
   createPullRequestReviewComment(input: CreatePullRequestReviewCommentInput): Promise<{ id: number }>;
   deletePullRequestReviewComment(owner: string, repo: string, commentId: number): Promise<void>;
   createPendingReview(input: CreatePendingReviewInput): Promise<{ id: number }>;
+  deletePendingReview(owner: string, repo: string, pullNumber: number, reviewId: number): Promise<void>;
   createRelease(input: CreateReleaseInput): Promise<{ id: number; tagName: string }>;
   deleteRelease(owner: string, repo: string, releaseId: number): Promise<void>;
   deleteTag(owner: string, repo: string, tag: string): Promise<void>;
@@ -701,7 +702,7 @@ async function createPendingReviewFixture(context: AllocationBuilderContext, pul
     pullNumber,
     body: `Pending benchmark review for ${context.runId}.`,
   });
-  const resource = registerResource(context, "pending_review", "none", { pullNumber, reviewId: review.id });
+  const resource = registerResource(context, "pending_review", "delete", { pullNumber, reviewId: review.id });
   return { resourceId: resource.id };
 }
 
@@ -816,7 +817,7 @@ function buildCompletionVerifier(
     rawTool = "search_issues";
     params = {
       ...common,
-      q: expectedCreatedIssueQuery(task.id, String(variables.RUN_ID ?? ""), owner, repo),
+      query: expectedCreatedIssueQuery(task.id, String(variables.RUN_ID ?? ""), owner, repo),
     };
     rawArgs = params;
     verifierExtra = { expectedTextIncludes: expectedCreatedIssueTitle(task.id, String(variables.RUN_ID ?? "")) };
@@ -898,29 +899,29 @@ function taskSpecificVerifier(
         expectedTextIncludes: String(variables.GITHUB_BENCHMARK_ASSIGNEE),
       });
     case "issue-search-label":
-      return args("search_issues", "search_issues", { ...common, q: `repo:${owner}/${repo} label:benchmark` });
+      return args("search_issues", "search_issues", { ...common, query: `repo:${owner}/${repo} label:benchmark` });
     case "issue-comment":
     case "error-issue-comment-wrong-number":
       return args("search_issues", "search_issues", {
         ...common,
-        q: task.id === "issue-comment"
+        query: task.id === "issue-comment"
           ? `repo:${owner}/${repo} "benchmark comment" "${String(variables.RUN_ID)}" in:comments`
           : `repo:${owner}/${repo} "benchmark recovery" in:comments`,
       }, { expectedTextIncludes: task.id === "issue-comment" ? String(variables.RUN_ID) : "benchmark recovery" });
     case "issue-assign":
       return args("search_issues", "search_issues", {
         ...common,
-        q: `repo:${owner}/${repo} is:issue "${String(variables.RUN_ID)}" assignee:${String(variables.GITHUB_BENCHMARK_ASSIGNEE)}`,
+        query: `repo:${owner}/${repo} is:issue "${String(variables.RUN_ID)}" assignee:${String(variables.GITHUB_BENCHMARK_ASSIGNEE)}`,
       }, { expectedTextIncludes: String(variables.RUN_ID) });
     case "issue-label-add":
       return args("search_issues", "search_issues", {
         ...common,
-        q: `repo:${owner}/${repo} is:issue "${String(variables.RUN_ID)}" label:benchmark`,
+        query: `repo:${owner}/${repo} is:issue "${String(variables.RUN_ID)}" label:benchmark`,
       }, { expectedTextIncludes: String(variables.RUN_ID) });
     case "issue-label-remove":
       return args("search_issues", "search_issues", {
         ...common,
-        q: `repo:${owner}/${repo} is:issue "${String(variables.RUN_ID)}" label:benchmark -label:needs-review`,
+        query: `repo:${owner}/${repo} is:issue "${String(variables.RUN_ID)}" label:benchmark -label:needs-review`,
       }, { expectedTextIncludes: String(variables.RUN_ID) });
     case "pull-list-open":
       return args("list_pull_requests", "list_pull_requests", { ...common, state: "open" });
@@ -951,7 +952,7 @@ function taskSpecificVerifier(
     case "error-label-add-invalid":
       return args("search_issues", "search_issues", {
         ...common,
-        q: `repo:${owner}/${repo} is:issue "${String(variables.RUN_ID)}" label:benchmark`,
+        query: `repo:${owner}/${repo} is:issue "${String(variables.RUN_ID)}" label:benchmark`,
       }, { expectedTextIncludes: String(variables.RUN_ID) });
     case "repo-get":
       return args("get_repository_tree", "get_repository_tree", { ...common });
@@ -964,9 +965,9 @@ function taskSpecificVerifier(
     case "repo-file-read":
       return args("get_file_contents", "get_file_contents", { ...common, path: String(variables.FIXTURE_README_PATH) });
     case "search-code":
-      return args("search_code", "search_code", { ...common, q: `repo:${owner}/${repo} benchmark` });
+      return args("search_code", "search_code", { ...common, query: `repo:${owner}/${repo} benchmark` });
     case "search-repositories":
-      return args("search_repositories", "search_repositories", { q: `${repo} user:${owner}` });
+      return args("search_repositories", "search_repositories", { query: `${repo} user:${owner}` });
     case "labels-list":
       return args("list_label", "list_label", { ...common }, { expectedTextIncludes: "benchmark" });
     case "collaborators-list":
@@ -982,7 +983,7 @@ function taskSpecificVerifier(
     case "user-get-authenticated":
       return args("get_me", "get_me", {});
     case "error-search-malformed-query":
-      return args("search_issues", "search_issues", { ...common, q: `repo:${owner}/${repo} benchmark recovery` });
+      return args("search_issues", "search_issues", { ...common, query: `repo:${owner}/${repo} benchmark recovery` });
     default:
       return undefined;
   }
@@ -1102,6 +1103,10 @@ async function teardownResource(client: GitHubFixtureClient, resource: FixtureRe
   }
   if (resource.type === "pull_request_review_comment" && typeof meta.commentId === "number") {
     await client.deletePullRequestReviewComment(resource.owner, resource.repo, meta.commentId);
+    return { resourceId: resource.id, type: resource.type, action, status: "ok" };
+  }
+  if (resource.type === "pending_review" && typeof meta.pullNumber === "number" && typeof meta.reviewId === "number") {
+    await client.deletePendingReview(resource.owner, resource.repo, meta.pullNumber, meta.reviewId);
     return { resourceId: resource.id, type: resource.type, action, status: "ok" };
   }
   if (resource.type === "branch" && typeof meta.branch === "string") {
@@ -1235,6 +1240,8 @@ class DryRunGitHubFixtureClient implements GitHubFixtureClient {
     this.reviewId += 1;
     return { id: this.reviewId };
   }
+
+  async deletePendingReview(): Promise<void> {}
 
   async createRelease(input: CreateReleaseInput): Promise<{ id: number; tagName: string }> {
     this.releaseId += 1;
@@ -1376,6 +1383,10 @@ class RestGitHubFixtureClient implements GitHubFixtureClient {
       body: input.body,
     });
     return { id: data.id };
+  }
+
+  async deletePendingReview(owner: string, repo: string, pullNumber: number, reviewId: number): Promise<void> {
+    await this.deleteIfFound(`/repos/${owner}/${repo}/pulls/${pullNumber}/reviews/${reviewId}`);
   }
 
   async createRelease(input: CreateReleaseInput): Promise<{ id: number; tagName: string }> {
