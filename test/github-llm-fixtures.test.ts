@@ -177,24 +177,29 @@ test("GitHub fixture setup seeds branch fixtures, isolates file reads, and inclu
     const label = mustFindAllocation(setup.allocations, "error-label-add-invalid", configId);
     assert.match(String(verifierParams(label).query), /label:benchmark/);
     assert.equal(verifierExpected(label, "expectedTextIncludes"), label.variables.RUN_ID);
+    assert.deepEqual(verifierRetry(label), { attempts: 6, delayMs: 5000 });
 
     const comment = mustFindAllocation(setup.allocations, "issue-comment", configId);
     assert.equal(verifierOperation(comment), "search_issues");
     assert.match(String(verifierParams(comment).query), /in:comments/);
     assert.match(String(verifierExpected(comment, "expectedTextIncludes")), /issue-comment/);
+    assert.deepEqual(verifierRetry(comment), { attempts: 6, delayMs: 5000 });
 
     const assign = mustFindAllocation(setup.allocations, "issue-assign", configId);
     assert.match(String(verifierParams(assign).query), new RegExp(`assignee:${String(assign.variables.GITHUB_BENCHMARK_ASSIGNEE)}`));
     assert.equal(verifierExpected(assign, "expectedTextIncludes"), assign.variables.RUN_ID);
+    assert.deepEqual(verifierRetry(assign), { attempts: 6, delayMs: 5000 });
 
     const labelAdd = mustFindAllocation(setup.allocations, "issue-label-add", configId);
     assert.match(String(verifierParams(labelAdd).query), /label:benchmark/);
     assert.equal(verifierExpected(labelAdd, "expectedTextIncludes"), labelAdd.variables.RUN_ID);
+    assert.deepEqual(verifierRetry(labelAdd), { attempts: 6, delayMs: 5000 });
 
     const labelRemove = mustFindAllocation(setup.allocations, "issue-label-remove", configId);
     assert.match(String(verifierParams(labelRemove).query), /label:benchmark/);
     assert.match(String(verifierParams(labelRemove).query), /-label:needs-review/);
     assert.equal(verifierExpected(labelRemove, "expectedTextIncludes"), labelRemove.variables.RUN_ID);
+    assert.deepEqual(verifierRetry(labelRemove), { attempts: 6, delayMs: 5000 });
 
     const title = mustFindAllocation(setup.allocations, "issue-update-title", configId);
     assert.equal(verifierParams(title)[issueNumberKey], title.variables.FIXTURE_ISSUE_NUMBER);
@@ -219,6 +224,7 @@ test("GitHub fixture setup seeds branch fixtures, isolates file reads, and inclu
       path: "items.*.number",
       value: Number(recoveryComment.variables.FIXTURE_ISSUE_NUMBER),
     }]);
+    assert.deepEqual(verifierRetry(recoveryComment), { attempts: 6, delayMs: 5000 });
 
     const updateBranch = mustFindAllocation(setup.allocations, "pull-update-branch", configId);
     assert.equal(verifierParams(updateBranch).path, updateBranch.variables.FIXTURE_BASE_UPDATE_FILE);

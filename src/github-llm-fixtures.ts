@@ -970,23 +970,23 @@ function taskSpecificVerifier(
           ? `repo:${owner}/${repo} "benchmark comment" "${String(variables.RUN_ID)}" in:comments`
           : `repo:${owner}/${repo} "benchmark recovery" in:comments`,
       }, task.id === "issue-comment"
-        ? { expectedTextIncludes: String(variables.RUN_ID) }
-        : { expectedJsonMatches: [{ path: "items.*.number", value: Number(variables.FIXTURE_ISSUE_NUMBER) }] });
+        ? { expectedTextIncludes: String(variables.RUN_ID), retry: SEARCH_COMPLETION_RETRY }
+        : { expectedJsonMatches: [{ path: "items.*.number", value: Number(variables.FIXTURE_ISSUE_NUMBER) }], retry: SEARCH_COMPLETION_RETRY });
     case "issue-assign":
       return args("search_issues", "search_issues", {
         ...common,
         query: `repo:${owner}/${repo} is:issue "${String(variables.RUN_ID)}" assignee:${String(variables.GITHUB_BENCHMARK_ASSIGNEE)}`,
-      }, { expectedTextIncludes: String(variables.RUN_ID) });
+      }, { expectedTextIncludes: String(variables.RUN_ID), retry: SEARCH_COMPLETION_RETRY });
     case "issue-label-add":
       return args("search_issues", "search_issues", {
         ...common,
         query: `repo:${owner}/${repo} is:issue "${String(variables.RUN_ID)}" label:benchmark`,
-      }, { expectedTextIncludes: String(variables.RUN_ID) });
+      }, { expectedTextIncludes: String(variables.RUN_ID), retry: SEARCH_COMPLETION_RETRY });
     case "issue-label-remove":
       return args("search_issues", "search_issues", {
         ...common,
         query: `repo:${owner}/${repo} is:issue "${String(variables.RUN_ID)}" label:benchmark -label:needs-review`,
-      }, { expectedTextIncludes: String(variables.RUN_ID) });
+      }, { expectedTextIncludes: String(variables.RUN_ID), retry: SEARCH_COMPLETION_RETRY });
     case "pull-list-open":
       return args("list_pull_requests", "list_pull_requests", { ...common, state: "open" });
     case "pull-request-reviewers":
@@ -1033,7 +1033,7 @@ function taskSpecificVerifier(
       return args("search_issues", "search_issues", {
         ...common,
         query: `repo:${owner}/${repo} is:issue "${String(variables.RUN_ID)}" label:benchmark`,
-      }, { expectedTextIncludes: String(variables.RUN_ID) });
+      }, { expectedTextIncludes: String(variables.RUN_ID), retry: SEARCH_COMPLETION_RETRY });
     case "repo-get":
       return args("get_repository_tree", "get_repository_tree", { ...common });
     case "repo-branches":
