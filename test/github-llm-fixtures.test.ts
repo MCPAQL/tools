@@ -90,8 +90,10 @@ test("GitHub fixture setup seeds branch fixtures, isolates file reads, and inclu
     "pull-add-review-comment",
     "pull-submit-review",
     "pull-merge",
+    "pull-update-branch",
     "repo-file-read",
     "repo-file-update",
+    "error-branch-create-existing",
     "issue-comment",
     "issue-assign",
     "issue-label-add",
@@ -125,8 +127,24 @@ test("GitHub fixture setup seeds branch fixtures, isolates file reads, and inclu
   assert.ok(mergeResources.some((resource) =>
     resource.type === "expected_file" &&
     resource.metadata.path === pullMerge.variables.FIXTURE_CHANGED_FILE &&
-    resource.metadata.branch === pullMerge.variables.FIXTURE_BASE_BRANCH
+      resource.metadata.branch === pullMerge.variables.FIXTURE_BASE_BRANCH
   ));
+
+  const pullUpdateBranch = mustFindAllocation(setup.allocations, "pull-update-branch", "raw_mcp");
+  const updateBranchResources = setup.createdResources.filter((resource) => pullUpdateBranch.createdResourceIds.includes(resource.id));
+  assert.ok(updateBranchResources.some((resource) =>
+    resource.type === "file" &&
+      resource.metadata.branch === pullUpdateBranch.variables.FIXTURE_BASE_BRANCH &&
+      String(resource.metadata.path).includes(`${String(pullUpdateBranch.variables.RUN_ID)}-base-update`)
+  ));
+
+  const existingBranchRecovery = mustFindAllocation(setup.allocations, "error-branch-create-existing", "raw_mcp");
+  const existingBranchResources = setup.createdResources.filter((resource) => existingBranchRecovery.createdResourceIds.includes(resource.id));
+  assert.ok(existingBranchResources.some((resource) =>
+    resource.type === "branch" &&
+      resource.metadata.branch === `benchmark-${String(existingBranchRecovery.variables.RUN_ID)}`
+  ));
+  assert.equal(existingBranchResources.some((resource) => resource.type === "expected_branch"), false);
 
   const fileRead = mustFindAllocation(setup.allocations, "repo-file-read", "raw_mcp");
   assert.equal(fileRead.variables.FIXTURE_README_PATH, fileRead.variables.FIXTURE_FILE_PATH);
@@ -186,8 +204,11 @@ test("GitHub fixture setup seeds branch fixtures, isolates file reads, and inclu
 
     const recoveryComment = mustFindAllocation(setup.allocations, "error-issue-comment-wrong-number", configId);
     assert.match(String(verifierParams(recoveryComment).query), /benchmark recovery/);
-    assert.doesNotMatch(String(verifierParams(recoveryComment).query), new RegExp(String(recoveryComment.variables.RUN_ID)));
-    assert.equal(verifierExpected(recoveryComment, "expectedTextIncludes"), String(recoveryComment.variables.FIXTURE_ISSUE_NUMBER));
+    assert.match(String(verifierParams(recoveryComment).query), new RegExp(String(recoveryComment.variables.FIXTURE_ISSUE_NUMBER)));
+    assert.deepEqual(verifierJsonMatches(recoveryComment), [{
+      path: "items.*.number",
+      value: Number(recoveryComment.variables.FIXTURE_ISSUE_NUMBER),
+    }]);
 
     const requestReviewers = mustFindAllocation(setup.allocations, "pull-request-reviewers", configId);
     assert.equal(verifierParams(requestReviewers).pull_number, requestReviewers.variables.FIXTURE_PULL_NUMBER);
@@ -202,7 +223,7 @@ test("GitHub fixture setup seeds branch fixtures, isolates file reads, and inclu
 
     const pullMergeVerifier = mustFindAllocation(setup.allocations, "pull-merge", configId);
     assert.equal(verifierParams(pullMergeVerifier).pull_number, pullMergeVerifier.variables.FIXTURE_MERGEABLE_PULL_NUMBER);
-    assert.equal(verifierExpected(pullMergeVerifier, "expectedTextIncludes"), `"merged":true`);
+    assert.deepEqual(verifierJsonMatches(pullMergeVerifier), [{ path: "merged", value: true }]);
 
     const reviewComment = mustFindAllocation(setup.allocations, "pull-add-review-comment", configId);
     const reviewCommentResources = setup.createdResources.filter((resource) => reviewComment.createdResourceIds.includes(resource.id));
@@ -570,6 +591,20 @@ async function writeManifest(manifestPath: string, taskIds?: string[]): Promise<
       expectedRawMethod: null,
     },
     {
+      id: "pull-update-branch",
+      taskType: "pull_request_update",
+      prompt: "Update pull request ${FIXTURE_PULL_NUMBER} with the latest base branch changes.",
+      expectedFirstTool: {
+        rawMcp: "update_pull_request_branch",
+        mcpaqlAdapted: "mcp_aql_update",
+      },
+      expectedOperation: "update_pull_request_branch",
+      requiresFixture: ["pull_request"],
+      mutation: true,
+      inducedError: { enabled: false },
+      expectedRawMethod: null,
+    },
+    {
       id: "release-create-draft",
       taskType: "release_read",
       prompt: "Get the release for tag ${FIXTURE_TAG}.",
@@ -680,6 +715,23 @@ async function writeManifest(manifestPath: string, taskIds?: string[]): Promise<
       expectedRawMethod: null,
       expectedAdaptedMethod: "update",
     },
+    {
+      id: "error-branch-create-existing",
+      taskType: "recovery_git_update",
+      prompt: "Create branch benchmark-${RUN_ID} from ${FIXTURE_BASE_BRANCH}.",
+      expectedFirstTool: {
+        rawMcp: "create_branch",
+        mcpaqlAdapted: "mcp_aql_create",
+      },
+      expectedOperation: "create_branch",
+      requiresFixture: [],
+      mutation: true,
+      inducedError: {
+        enabled: true,
+        errorCode: "REF_EXISTS",
+      },
+      expectedRawMethod: null,
+    },
   ].filter((task) => !taskIds || taskIds.includes(task.id));
 
   await writeFile(manifestPath, JSON.stringify({
@@ -735,6 +787,12 @@ function verifierExpected(
   assert.ok(allocation.completionVerifier && typeof allocation.completionVerifier === "object");
   const verifier = allocation.completionVerifier as Record<string, unknown>;
   return verifier[key];
+}
+
+function verifierJsonMatches(allocation: { completionVerifier?: unknown }): unknown {
+  assert.ok(allocation.completionVerifier && typeof allocation.completionVerifier === "object");
+  const verifier = allocation.completionVerifier as Record<string, unknown>;
+  return verifier.expectedJsonMatches;
 }
 
 class FailingIssueClient implements GitHubFixtureClient {

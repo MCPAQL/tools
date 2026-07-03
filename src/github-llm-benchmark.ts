@@ -115,6 +115,10 @@ interface FixtureCompletionVerifier {
   expectError?: boolean;
   expectedTextIncludes?: string;
   expectedTextExcludes?: string;
+  expectedJsonMatches?: Array<{
+    path: string;
+    value: unknown;
+  }>;
 }
 
 interface ToolDefinition {
@@ -629,12 +633,7 @@ async function verifyStoppedTaskCompletion(
   );
   const expectedError = verifier.expectError === true;
   const ok = expectedError ? result.isError === true : result.isError !== true;
-  const textMatches = verifier.expectedTextIncludes
-    ? JSON.stringify(result).includes(verifier.expectedTextIncludes)
-    : true;
-  const textExcludes = verifier.expectedTextExcludes
-    ? !JSON.stringify(result).includes(verifier.expectedTextExcludes)
-    : true;
+  const verifierMatches = completionVerifierResultMatches(result, verifier);
   await appendTranscript(context.transcriptPath, {
     type: "completion_verifier_result",
     taskId: context.task.id,
@@ -642,10 +641,10 @@ async function verifyStoppedTaskCompletion(
     runIndex: context.runIndex,
     verifier: deepRedact(verifier),
     result: deepRedact(result),
-    ok: ok && textMatches && textExcludes,
+    ok: ok && verifierMatches,
   });
 
-  if (ok && textMatches && textExcludes) {
+  if (ok && verifierMatches) {
     return { outcome: "completed" };
   }
   return {
@@ -1167,6 +1166,71 @@ function containsString(value: unknown, expected: string): boolean {
   if (Array.isArray(value)) return value.some((entry) => containsString(entry, expected));
   if (isRecord(value)) return Object.values(value).some((entry) => containsString(entry, expected));
   return false;
+}
+
+export function completionVerifierResultMatches(
+  result: unknown,
+  verifier: {
+    expectedTextIncludes?: string;
+    expectedTextExcludes?: string;
+    expectedJsonMatches?: Array<{ path: string; value: unknown }>;
+  },
+): boolean {
+  const resultText = JSON.stringify(result) ?? "";
+  const textMatches = verifier.expectedTextIncludes ? resultText.includes(verifier.expectedTextIncludes) : true;
+  const textExcludes = verifier.expectedTextExcludes ? !resultText.includes(verifier.expectedTextExcludes) : true;
+  const jsonMatches = verifier.expectedJsonMatches
+    ? verifier.expectedJsonMatches.every((expected) =>
+      completionVerifierPayloadCandidates(result).some((candidate) =>
+        readJsonPathValues(candidate, expected.path).some((value) => Object.is(value, expected.value))
+      )
+    )
+    : true;
+  return textMatches && textExcludes && jsonMatches;
+}
+
+function completionVerifierPayloadCandidates(value: unknown, depth = 0, candidates: unknown[] = []): unknown[] {
+  if (depth > 5) return candidates;
+  candidates.push(value);
+  if (!isRecord(value)) return candidates;
+
+  if ("structuredContent" in value) completionVerifierPayloadCandidates(value.structuredContent, depth + 1, candidates);
+  if ("structured_content" in value) completionVerifierPayloadCandidates(value.structured_content, depth + 1, candidates);
+  if ("data" in value) completionVerifierPayloadCandidates(value.data, depth + 1, candidates);
+
+  const content = value.content;
+  if (Array.isArray(content)) {
+    for (const entry of content) {
+      if (!isRecord(entry) || typeof entry.text !== "string") continue;
+      candidates.push(entry.text);
+      try {
+        completionVerifierPayloadCandidates(JSON.parse(entry.text), depth + 1, candidates);
+      } catch {
+        // Plain text MCP content is still available to text-based verifiers.
+      }
+    }
+  }
+  return candidates;
+}
+
+function readJsonPathValues(value: unknown, pathExpression: string): unknown[] {
+  let values = [value];
+  for (const segment of pathExpression.split(".")) {
+    const next: unknown[] = [];
+    for (const candidate of values) {
+      if (segment === "*") {
+        if (Array.isArray(candidate)) next.push(...candidate);
+        continue;
+      }
+      if (Array.isArray(candidate) && /^\d+$/.test(segment)) {
+        next.push(candidate[Number(segment)]);
+        continue;
+      }
+      if (isRecord(candidate) && segment in candidate) next.push(candidate[segment]);
+    }
+    values = next.filter((entry) => entry !== undefined);
+  }
+  return values;
 }
 
 function estimateTokens(value: unknown): number {

@@ -104,6 +104,10 @@ interface FixtureCompletionVerifier {
   expectError?: boolean;
   expectedTextIncludes?: string;
   expectedTextExcludes?: string;
+  expectedJsonMatches?: Array<{
+    path: string;
+    value: unknown;
+  }>;
 }
 
 export interface FixtureResource {
@@ -487,6 +491,10 @@ async function buildAllocation(context: AllocationBuilderContext): Promise<Fixtu
     variables.FIXTURE_CHANGED_FILE = branch.changedFile;
     createdResourceIds.push(...branch.resourceIds);
   }
+  if (context.task.id === "error-branch-create-existing") {
+    const branch = await createExistingBranchFixture(context);
+    createdResourceIds.push(branch.resourceId);
+  }
   if (required.has("pull_request") || required.has("pull_request_review_comment")) {
     const pull = await createPullRequestFixture(context, "pull-request");
     variables.FIXTURE_PULL_NUMBER = pull.pullNumber;
@@ -663,12 +671,38 @@ async function createPullRequestFixture(
     branch: branch.branch,
     url: pull.url ?? "",
   });
+  const resourceIds = [branch.resourceId, fileResource.id, pullResource.id];
+  if (context.task.id === "pull-update-branch") {
+    const baseUpdate = await createBaseUpdateFixture(context);
+    resourceIds.push(baseUpdate.resourceId);
+  }
   return {
     pullNumber: pull.number,
     branch: branch.branch,
     changedFile,
-    resourceIds: [branch.resourceId, fileResource.id, pullResource.id],
+    resourceIds,
   };
+}
+
+async function createBaseUpdateFixture(context: AllocationBuilderContext): Promise<{ filePath: string; resourceId: string }> {
+  const filePath = `benchmark/${context.runId}-base-update.md`;
+  const file = await context.client.createOrUpdateFile({
+    owner: context.owner,
+    repo: context.repo,
+    filePath,
+    branch: context.baseBranch,
+    message: `Advance benchmark base ${context.runId}`,
+    content: `# Benchmark base update\n\nTask: ${context.task.id}\nRun: ${context.runId}\n`,
+  });
+  const resource = registerResource(context, "file", "delete", { path: file.path, branch: context.baseBranch, sha: file.sha });
+  return { filePath: file.path, resourceId: resource.id };
+}
+
+async function createExistingBranchFixture(context: AllocationBuilderContext): Promise<{ branch: string; resourceId: string }> {
+  const branch = `benchmark-${context.runId}`;
+  await context.client.createBranch({ owner: context.owner, repo: context.repo, branch, sha: context.baseSha });
+  const resource = registerResource(context, "branch", "delete", { branch });
+  return { branch, resourceId: resource.id };
 }
 
 async function createPullRequestReviewCommentFixture(
@@ -742,7 +776,7 @@ function registerExpectedModelResources(
       branch: context.baseBranch,
     }).id);
   }
-  if (context.task.id === "branch-create" || context.task.id === "error-branch-create-existing") {
+  if (context.task.id === "branch-create") {
     resourceIds.push(registerResource(context, "expected_branch", "delete", { branch: `benchmark-${context.runId}` }).id);
   }
   if (context.task.id === "repo-file-create") {
@@ -846,7 +880,7 @@ function buildCompletionVerifier(
     };
     rawArgs = params;
     if (task.id === "pull-comments") verifierExtra = { expectedTextIncludes: expectedReviewComment(String(variables.RUN_ID ?? "")) };
-    if (task.id === "pull-merge") verifierExtra = { expectedTextIncludes: expectedMergedPullState() };
+    if (task.id === "pull-merge") verifierExtra = { expectedJsonMatches: [{ path: "merged", value: true }] };
   } else if (task.id === "branch-create" || task.id === "error-branch-create-existing") {
     operation = "list_branches";
     rawTool = "list_branches";
@@ -907,8 +941,10 @@ function taskSpecificVerifier(
         ...common,
         query: task.id === "issue-comment"
           ? `repo:${owner}/${repo} "benchmark comment" "${String(variables.RUN_ID)}" in:comments`
-          : `repo:${owner}/${repo} "benchmark recovery" in:comments`,
-      }, { expectedTextIncludes: task.id === "issue-comment" ? String(variables.RUN_ID) : String(variables.FIXTURE_ISSUE_NUMBER) });
+          : `repo:${owner}/${repo} is:issue ${String(variables.FIXTURE_ISSUE_NUMBER)} "benchmark recovery" in:comments`,
+      }, task.id === "issue-comment"
+        ? { expectedTextIncludes: String(variables.RUN_ID) }
+        : { expectedJsonMatches: [{ path: "items.*.number", value: Number(variables.FIXTURE_ISSUE_NUMBER) }] });
     case "issue-assign":
       return args("search_issues", "search_issues", {
         ...common,
@@ -1036,10 +1072,6 @@ function expectedFileRecoveryLine(runId: string): string {
 
 function expectedReviewComment(runId: string): string {
   return `Benchmark review comment ${runId}`;
-}
-
-function expectedMergedPullState(): string {
-  return `"merged":true`;
 }
 
 function pullHeadFilter(owner: string, branch: string): string {

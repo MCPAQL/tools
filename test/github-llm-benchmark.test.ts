@@ -4,7 +4,7 @@ import path from "node:path";
 import { tmpdir } from "node:os";
 import { setTimeout as sleep } from "node:timers/promises";
 import test from "node:test";
-import { runGitHubLlmBenchmark } from "../src/github-llm-benchmark.js";
+import { completionVerifierResultMatches, runGitHubLlmBenchmark } from "../src/github-llm-benchmark.js";
 import { buildLlmMetricsReport, loadLlmMetricsInput } from "../src/parity/llm-metrics.js";
 
 test("GitHub LLM benchmark dry-run emits normalizable metrics input and artifacts", async () => {
@@ -189,6 +189,46 @@ test("GitHub LLM benchmark dry-run honors single configuration selection", async
   await assert.rejects(
     stat(path.join(artifactRoot, "mcpaql-adapted", "tool-definitions.json")),
     /ENOENT/,
+  );
+});
+
+test("GitHub LLM benchmark completion verifier checks parsed MCP text JSON", () => {
+  const mergedPullResult = {
+    content: [{ type: "text", text: JSON.stringify({ merged: true }) }],
+  };
+  const unmergedPullResult = {
+    content: [{ type: "text", text: JSON.stringify({ merged: false }) }],
+  };
+  const adaptedMergedPullResult = {
+    content: [{
+      type: "text",
+      text: JSON.stringify({
+        success: true,
+        data: {
+          content: [{ type: "text", text: JSON.stringify({ merged: true }) }],
+        },
+      }),
+    }],
+  };
+
+  assert.equal(
+    completionVerifierResultMatches(mergedPullResult, { expectedJsonMatches: [{ path: "merged", value: true }] }),
+    true,
+  );
+  assert.equal(
+    completionVerifierResultMatches(unmergedPullResult, { expectedJsonMatches: [{ path: "merged", value: true }] }),
+    false,
+  );
+  assert.equal(
+    completionVerifierResultMatches(adaptedMergedPullResult, { expectedJsonMatches: [{ path: "merged", value: true }] }),
+    true,
+  );
+  assert.equal(
+    completionVerifierResultMatches(
+      { content: [{ type: "text", text: JSON.stringify({ items: [{ number: 47 }] }) }] },
+      { expectedJsonMatches: [{ path: "items.*.number", value: 47 }] },
+    ),
+    true,
   );
 });
 
