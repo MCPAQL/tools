@@ -393,7 +393,7 @@
     {
       "id": "pull-add-review-comment",
       "taskType": "pull_request_update",
-      "prompt": "Add a review comment to the pending review for pull request ${FIXTURE_PULL_NUMBER} on ${FIXTURE_CHANGED_FILE} with body 'Benchmark review comment ${RUN_ID}'.",
+      "prompt": "Add a review comment to the pending review for pull request ${FIXTURE_PULL_NUMBER} on ${FIXTURE_CHANGED_FILE} with body 'Benchmark review comment ${RUN_ID}', then submit the pending review.",
       "expectedFirstTool": {
         "rawMcp": "add_comment_to_pending_review",
         "mcpaqlAdapted": "mcp_aql_create"

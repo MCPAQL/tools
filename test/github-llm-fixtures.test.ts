@@ -79,10 +79,12 @@ test("GitHub fixture setup seeds branch fixtures, isolates file reads, and inclu
     "issue-create-basic",
     "issue-create-with-labels",
     "issue-update-title",
+    "pull-comments",
     "pull-create",
     "pull-request-reviewers",
     "pull-add-review-comment",
     "pull-submit-review",
+    "pull-merge",
     "repo-file-read",
     "repo-file-update",
     "issue-comment",
@@ -112,6 +114,14 @@ test("GitHub fixture setup seeds branch fixtures, isolates file reads, and inclu
   const pullResources = setup.createdResources.filter((resource) => pullCreate.createdResourceIds.includes(resource.id));
   assert.ok(pullResources.some((resource) => resource.type === "branch" && resource.metadata.branch === pullBranch));
   assert.ok(pullResources.some((resource) => resource.type === "file" && resource.metadata.branch === pullBranch));
+
+  const pullMerge = mustFindAllocation(setup.allocations, "pull-merge", "raw_mcp");
+  const mergeResources = setup.createdResources.filter((resource) => pullMerge.createdResourceIds.includes(resource.id));
+  assert.ok(mergeResources.some((resource) =>
+    resource.type === "expected_file" &&
+    resource.metadata.path === pullMerge.variables.FIXTURE_CHANGED_FILE &&
+    resource.metadata.branch === pullMerge.variables.FIXTURE_BASE_BRANCH
+  ));
 
   const fileRead = mustFindAllocation(setup.allocations, "repo-file-read", "raw_mcp");
   assert.equal(fileRead.variables.FIXTURE_README_PATH, fileRead.variables.FIXTURE_FILE_PATH);
@@ -174,6 +184,13 @@ test("GitHub fixture setup seeds branch fixtures, isolates file reads, and inclu
     const requestReviewers = mustFindAllocation(setup.allocations, "pull-request-reviewers", configId);
     assert.equal(verifierParams(requestReviewers).pull_number, requestReviewers.variables.FIXTURE_PULL_NUMBER);
     assert.equal(verifierExpected(requestReviewers, "expectedTextIncludes"), requestReviewers.variables.GITHUB_BENCHMARK_REVIEWER);
+
+    const pullComments = mustFindAllocation(setup.allocations, "pull-comments", configId);
+    const commentResources = setup.createdResources.filter((resource) => pullComments.createdResourceIds.includes(resource.id));
+    assert.ok(commentResources.some((resource) => resource.type === "pull_request_review_comment"));
+    assert.equal(verifierParams(pullComments).pull_number, pullComments.variables.FIXTURE_PULL_NUMBER);
+    assert.equal(verifierParams(pullComments).method, "get_review_comments");
+    assert.equal(verifierExpected(pullComments, "expectedTextIncludes"), `Benchmark review comment ${String(pullComments.variables.RUN_ID)}`);
 
     const reviewComment = mustFindAllocation(setup.allocations, "pull-add-review-comment", configId);
     assert.equal(verifierParams(reviewComment).pull_number, reviewComment.variables.FIXTURE_PULL_NUMBER);
@@ -350,6 +367,21 @@ async function writeManifest(manifestPath: string, taskIds?: string[]): Promise<
       expectedAdaptedMethod: "update",
     },
     {
+      id: "pull-comments",
+      taskType: "pull_request_read",
+      prompt: "List the review comments on pull request ${FIXTURE_PULL_NUMBER}.",
+      expectedFirstTool: {
+        rawMcp: "pull_request_read",
+        mcpaqlAdapted: "mcp_aql_read",
+      },
+      expectedOperation: "pull_request_read",
+      requiresFixture: ["pull_request_review_comment"],
+      mutation: false,
+      inducedError: { enabled: false },
+      expectedRawMethod: "get_review_comments",
+      expectedAdaptedMethod: "get_review_comments",
+    },
+    {
       id: "pull-request-reviewers",
       taskType: "pull_request_update",
       prompt: "Request review from ${GITHUB_BENCHMARK_REVIEWER} on pull request ${FIXTURE_PULL_NUMBER}.",
@@ -366,7 +398,7 @@ async function writeManifest(manifestPath: string, taskIds?: string[]): Promise<
     {
       id: "pull-add-review-comment",
       taskType: "pull_request_update",
-      prompt: "Add a review comment to the pending review for pull request ${FIXTURE_PULL_NUMBER} on ${FIXTURE_CHANGED_FILE} with body 'Benchmark review comment ${RUN_ID}'.",
+      prompt: "Add a review comment to the pending review for pull request ${FIXTURE_PULL_NUMBER} on ${FIXTURE_CHANGED_FILE} with body 'Benchmark review comment ${RUN_ID}', then submit the pending review.",
       expectedFirstTool: {
         rawMcp: "add_comment_to_pending_review",
         mcpaqlAdapted: "mcp_aql_create",
@@ -402,6 +434,20 @@ async function writeManifest(manifestPath: string, taskIds?: string[]): Promise<
       },
       expectedOperation: "create_pull_request",
       requiresFixture: ["branch"],
+      mutation: true,
+      inducedError: { enabled: false },
+      expectedRawMethod: null,
+    },
+    {
+      id: "pull-merge",
+      taskType: "pull_request_update",
+      prompt: "Merge pull request ${FIXTURE_MERGEABLE_PULL_NUMBER} with squash merge.",
+      expectedFirstTool: {
+        rawMcp: "merge_pull_request",
+        mcpaqlAdapted: "mcp_aql_update",
+      },
+      expectedOperation: "merge_pull_request",
+      requiresFixture: ["mergeable_pull_request"],
       mutation: true,
       inducedError: { enabled: false },
       expectedRawMethod: null,

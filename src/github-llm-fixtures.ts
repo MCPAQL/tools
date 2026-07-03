@@ -113,6 +113,7 @@ export interface FixtureResource {
     | "pull_request"
     | "branch"
     | "file"
+    | "pull_request_review_comment"
     | "release"
     | "tag"
     | "pending_review"
@@ -171,6 +172,8 @@ export interface GitHubFixtureClient {
   createPullRequest(input: CreatePullRequestInput): Promise<{ number: number; url?: string }>;
   closePullRequest(owner: string, repo: string, pullNumber: number): Promise<void>;
   findPullRequest(owner: string, repo: string, query: { head?: string; title?: string }): Promise<{ number: number } | undefined>;
+  createPullRequestReviewComment(input: CreatePullRequestReviewCommentInput): Promise<{ id: number }>;
+  deletePullRequestReviewComment(owner: string, repo: string, commentId: number): Promise<void>;
   createPendingReview(input: CreatePendingReviewInput): Promise<{ id: number }>;
   createRelease(input: CreateReleaseInput): Promise<{ id: number; tagName: string }>;
   deleteRelease(owner: string, repo: string, releaseId: number): Promise<void>;
@@ -228,6 +231,17 @@ interface CreatePullRequestInput {
   head: string;
   base: string;
   body?: string;
+}
+
+interface CreatePullRequestReviewCommentInput {
+  owner: string;
+  repo: string;
+  pullNumber: number;
+  body: string;
+  commitId: string;
+  path: string;
+  line: number;
+  side: "RIGHT";
 }
 
 interface CreatePendingReviewInput {
@@ -477,6 +491,10 @@ async function buildAllocation(context: AllocationBuilderContext): Promise<Fixtu
     variables.FIXTURE_BRANCH = pull.branch;
     variables.FIXTURE_CHANGED_FILE = pull.changedFile;
     createdResourceIds.push(...pull.resourceIds);
+    if (required.has("pull_request_review_comment")) {
+      const reviewComment = await createPullRequestReviewCommentFixture(context, pull.pullNumber, pull.branch, pull.changedFile);
+      createdResourceIds.push(reviewComment.resourceId);
+    }
   }
   if (required.has("mergeable_pull_request")) {
     const pull = await createPullRequestFixture(context, "mergeable");
@@ -651,6 +669,31 @@ async function createPullRequestFixture(
   };
 }
 
+async function createPullRequestReviewCommentFixture(
+  context: AllocationBuilderContext,
+  pullNumber: number,
+  branch: string,
+  changedFile: string,
+): Promise<{ resourceId: string }> {
+  const head = await context.client.getBranchHead(context.owner, context.repo, branch);
+  const comment = await context.client.createPullRequestReviewComment({
+    owner: context.owner,
+    repo: context.repo,
+    pullNumber,
+    body: expectedReviewComment(context.runId),
+    commitId: head.sha,
+    path: changedFile,
+    line: 1,
+    side: "RIGHT",
+  });
+  const resource = registerResource(context, "pull_request_review_comment", "delete", {
+    pullNumber,
+    commentId: comment.id,
+    path: changedFile,
+  });
+  return { resourceId: resource.id };
+}
+
 async function createPendingReviewFixture(context: AllocationBuilderContext, pullNumber: number): Promise<{ resourceId: string }> {
   const review = await context.client.createPendingReview({
     owner: context.owner,
@@ -689,6 +732,12 @@ function registerExpectedModelResources(
     resourceIds.push(registerResource(context, "expected_pull_request", "close", {
       title: `Benchmark PR ${context.runId}`,
       head: String(variables.FIXTURE_BRANCH),
+    }).id);
+  }
+  if (context.task.id === "pull-merge" && typeof variables.FIXTURE_CHANGED_FILE === "string") {
+    resourceIds.push(registerResource(context, "expected_file", "delete", {
+      path: variables.FIXTURE_CHANGED_FILE,
+      branch: context.baseBranch,
     }).id);
   }
   if (context.task.id === "branch-create" || context.task.id === "error-branch-create-existing") {
@@ -788,8 +837,13 @@ function buildCompletionVerifier(
   } else if (task.id.includes("pull") && Number.isFinite(pullNumber)) {
     operation = "pull_request_read";
     rawTool = "pull_request_read";
-    params = { ...common, method: "get", pull_number: pullNumber };
+    params = {
+      ...common,
+      method: task.id === "pull-comments" ? "get_review_comments" : "get",
+      pull_number: pullNumber,
+    };
     rawArgs = params;
+    if (task.id === "pull-comments") verifierExtra = { expectedTextIncludes: expectedReviewComment(String(variables.RUN_ID ?? "")) };
     if (task.id === "pull-merge") verifierExtra = { expectedTextIncludes: "merged" };
   } else if (task.id === "branch-create" || task.id === "error-branch-create-existing") {
     operation = "list_branches";
@@ -1046,6 +1100,10 @@ async function teardownResource(client: GitHubFixtureClient, resource: FixtureRe
     await client.closePullRequest(resource.owner, resource.repo, meta.number);
     return { resourceId: resource.id, type: resource.type, action, status: "ok" };
   }
+  if (resource.type === "pull_request_review_comment" && typeof meta.commentId === "number") {
+    await client.deletePullRequestReviewComment(resource.owner, resource.repo, meta.commentId);
+    return { resourceId: resource.id, type: resource.type, action, status: "ok" };
+  }
   if (resource.type === "branch" && typeof meta.branch === "string") {
     await client.deleteBranch(resource.owner, resource.repo, meta.branch);
     return { resourceId: resource.id, type: resource.type, action, status: "ok" };
@@ -1165,6 +1223,13 @@ class DryRunGitHubFixtureClient implements GitHubFixtureClient {
   async findPullRequest(): Promise<{ number: number } | undefined> {
     return undefined;
   }
+
+  async createPullRequestReviewComment(): Promise<{ id: number }> {
+    this.reviewId += 1;
+    return { id: this.reviewId };
+  }
+
+  async deletePullRequestReviewComment(): Promise<void> {}
 
   async createPendingReview(): Promise<{ id: number }> {
     this.reviewId += 1;
@@ -1289,6 +1354,21 @@ class RestGitHubFixtureClient implements GitHubFixtureClient {
       (query.head === undefined || pull.head.ref === query.head) &&
       (query.title === undefined || pull.title === query.title)
     );
+  }
+
+  async createPullRequestReviewComment(input: CreatePullRequestReviewCommentInput): Promise<{ id: number }> {
+    const data = await this.request<{ id: number }>("POST", `/repos/${input.owner}/${input.repo}/pulls/${input.pullNumber}/comments`, {
+      body: input.body,
+      commit_id: input.commitId,
+      path: input.path,
+      line: input.line,
+      side: input.side,
+    });
+    return { id: data.id };
+  }
+
+  async deletePullRequestReviewComment(owner: string, repo: string, commentId: number): Promise<void> {
+    await this.deleteIfFound(`/repos/${owner}/${repo}/pulls/comments/${commentId}`);
   }
 
   async createPendingReview(input: CreatePendingReviewInput): Promise<{ id: number }> {
