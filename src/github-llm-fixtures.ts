@@ -880,7 +880,7 @@ function buildCompletionVerifier(
     operation = "issue_read";
     rawTool = "issue_read";
     params = { ...common, method: "get", issue_number: issueNumber };
-    rawArgs = { ...common, method: "get", issueNumber };
+    rawArgs = params;
     if (task.id === "issue-close") verifierExtra = { expectedJsonMatches: [{ path: "state", value: "closed" }] };
     if (task.id === "issue-reopen") verifierExtra = { expectedJsonMatches: [{ path: "state", value: "open" }] };
     if (task.id === "issue-update-title") verifierExtra = { expectedTextIncludes: expectedUpdatedIssueTitle(String(variables.RUN_ID ?? "")) };
@@ -893,7 +893,7 @@ function buildCompletionVerifier(
   } else if (task.id === "pull-update-branch") {
     operation = "get_file_contents";
     rawTool = "get_file_contents";
-    params = { ...common, path: baseUpdateFile, branch };
+    params = { ...common, path: baseUpdateFile, ref: branch };
     rawArgs = params;
     verifierExtra = { expectedTextIncludes: "Benchmark base update" };
   } else if (task.id.includes("pull") && Number.isFinite(pullNumber)) {

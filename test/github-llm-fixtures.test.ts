@@ -152,7 +152,6 @@ test("GitHub fixture setup seeds branch fixtures, isolates file reads, and inclu
 
   for (const configId of ["raw_mcp", "mcpaql_adapted"] as const) {
     const pullNumberKey = configId === "raw_mcp" ? "pullNumber" : "pull_number";
-    const issueNumberKey = configId === "raw_mcp" ? "issueNumber" : "issue_number";
 
     const pullCreateVerifier = mustFindAllocation(setup.allocations, "pull-create", configId);
     assert.equal(verifierParams(pullCreateVerifier).head, `MCPAQL:${String(pullCreateVerifier.variables.FIXTURE_BRANCH)}`);
@@ -202,11 +201,11 @@ test("GitHub fixture setup seeds branch fixtures, isolates file reads, and inclu
     assert.deepEqual(verifierRetry(labelRemove), { attempts: 6, delayMs: 5000 });
 
     const title = mustFindAllocation(setup.allocations, "issue-update-title", configId);
-    assert.equal(verifierParams(title)[issueNumberKey], title.variables.FIXTURE_ISSUE_NUMBER);
+    assert.equal(verifierParams(title).issue_number, title.variables.FIXTURE_ISSUE_NUMBER);
     assert.equal(verifierExpected(title, "expectedTextIncludes"), `Benchmark title ${String(title.variables.RUN_ID)}`);
 
     const close = mustFindAllocation(setup.allocations, "issue-close", configId);
-    assert.equal(verifierParams(close)[issueNumberKey], close.variables.FIXTURE_ISSUE_NUMBER);
+    assert.equal(verifierParams(close).issue_number, close.variables.FIXTURE_ISSUE_NUMBER);
     assert.deepEqual(verifierJsonMatches(close), [{ path: "state", value: "closed" }]);
 
     const fileUpdate = mustFindAllocation(setup.allocations, "repo-file-update", configId);
@@ -228,7 +227,7 @@ test("GitHub fixture setup seeds branch fixtures, isolates file reads, and inclu
 
     const updateBranch = mustFindAllocation(setup.allocations, "pull-update-branch", configId);
     assert.equal(verifierParams(updateBranch).path, updateBranch.variables.FIXTURE_BASE_UPDATE_FILE);
-    assert.equal(verifierParams(updateBranch).branch, updateBranch.variables.FIXTURE_BRANCH);
+    assert.equal(verifierParams(updateBranch).ref, updateBranch.variables.FIXTURE_BRANCH);
     assert.equal(verifierExpected(updateBranch, "expectedTextIncludes"), "Benchmark base update");
 
     const requestReviewers = mustFindAllocation(setup.allocations, "pull-request-reviewers", configId);
