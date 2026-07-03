@@ -765,9 +765,12 @@ function buildCompletionVerifier(
   } else if (task.id.startsWith("issue-create") || task.id === "error-issue-create-missing-title") {
     operation = "search_issues";
     rawTool = "search_issues";
-    params = { ...common, q: `repo:${owner}/${repo} "${expectedCreatedIssueTitle(task.id, String(variables.RUN_ID ?? ""))}"` };
+    params = {
+      ...common,
+      q: expectedCreatedIssueQuery(task.id, String(variables.RUN_ID ?? ""), owner, repo),
+    };
     rawArgs = params;
-    verifierExtra = { expectedTextIncludes: String(variables.RUN_ID ?? "") };
+    verifierExtra = { expectedTextIncludes: expectedCreatedIssueTitle(task.id, String(variables.RUN_ID ?? "")) };
   } else if (task.id.includes("issue") && Number.isFinite(issueNumber)) {
     operation = "issue_read";
     rawTool = "issue_read";
@@ -851,23 +854,20 @@ function taskSpecificVerifier(
           : `repo:${owner}/${repo} "benchmark recovery" in:comments`,
       }, { expectedTextIncludes: task.id === "issue-comment" ? String(variables.RUN_ID) : "benchmark recovery" });
     case "issue-assign":
-      return args("issue_read", "issue_read", {
+      return args("search_issues", "search_issues", {
         ...common,
-        method: "get",
-        issue_number: Number(variables.FIXTURE_ISSUE_NUMBER),
-      }, { expectedTextIncludes: String(variables.GITHUB_BENCHMARK_ASSIGNEE) });
+        q: `repo:${owner}/${repo} is:issue "${String(variables.RUN_ID)}" assignee:${String(variables.GITHUB_BENCHMARK_ASSIGNEE)}`,
+      }, { expectedTextIncludes: String(variables.RUN_ID) });
     case "issue-label-add":
-      return args("issue_read", "issue_read", {
+      return args("search_issues", "search_issues", {
         ...common,
-        method: "get",
-        issue_number: Number(variables.FIXTURE_ISSUE_NUMBER),
-      }, { expectedTextIncludes: "benchmark" });
+        q: `repo:${owner}/${repo} is:issue "${String(variables.RUN_ID)}" label:benchmark`,
+      }, { expectedTextIncludes: String(variables.RUN_ID) });
     case "issue-label-remove":
-      return args("issue_read", "issue_read", {
+      return args("search_issues", "search_issues", {
         ...common,
-        method: "get",
-        issue_number: Number(variables.FIXTURE_ISSUE_NUMBER),
-      }, { expectedTextExcludes: "needs-review" });
+        q: `repo:${owner}/${repo} is:issue "${String(variables.RUN_ID)}" label:benchmark -label:needs-review`,
+      }, { expectedTextIncludes: String(variables.RUN_ID) });
     case "pull-list-open":
       return args("list_pull_requests", "list_pull_requests", { ...common, state: "open" });
     case "pull-request-reviewers":
@@ -895,11 +895,10 @@ function taskSpecificVerifier(
         pull_number: Number(variables.FIXTURE_PULL_NUMBER),
       }, { expectedTextIncludes: String(variables.GITHUB_BENCHMARK_REVIEWER) });
     case "error-label-add-invalid":
-      return args("issue_read", "issue_read", {
+      return args("search_issues", "search_issues", {
         ...common,
-        method: "get",
-        issue_number: Number(variables.FIXTURE_ISSUE_NUMBER),
-      }, { expectedTextIncludes: "benchmark" });
+        q: `repo:${owner}/${repo} is:issue "${String(variables.RUN_ID)}" label:benchmark`,
+      }, { expectedTextIncludes: String(variables.RUN_ID) });
     case "repo-get":
       return args("get_repository_tree", "get_repository_tree", { ...common });
     case "repo-branches":
@@ -960,6 +959,11 @@ function expectedCreatedIssueTitle(taskId: string, runId: string): string {
   if (taskId === "issue-create-with-labels") return `Labeled benchmark ${runId}`;
   if (taskId === "error-issue-create-missing-title") return `benchmark recovery ${runId}`;
   return `Benchmark issue ${runId}`;
+}
+
+function expectedCreatedIssueQuery(taskId: string, runId: string, owner: string, repo: string): string {
+  const labelFilters = taskId === "issue-create-with-labels" ? " label:benchmark label:bug" : "";
+  return `repo:${owner}/${repo} is:issue in:title "${expectedCreatedIssueTitle(taskId, runId)}"${labelFilters}`;
 }
 
 function expectedUpdatedIssueTitle(runId: string): string {

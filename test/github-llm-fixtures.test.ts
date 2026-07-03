@@ -76,6 +76,8 @@ test("GitHub fixture setup seeds branch fixtures, isolates file reads, and inclu
   const artifactRoot = path.join(root, "artifacts", "github-llm-benchmark");
   const setupPath = path.join(artifactRoot, "fixtures", "setup.json");
   await writeManifest(manifestPath, [
+    "issue-create-basic",
+    "issue-create-with-labels",
     "issue-update-title",
     "pull-create",
     "pull-request-reviewers",
@@ -115,12 +117,24 @@ test("GitHub fixture setup seeds branch fixtures, isolates file reads, and inclu
   assert.equal(fileRead.variables.FIXTURE_README_PATH, fileRead.variables.FIXTURE_FILE_PATH);
 
   for (const configId of ["raw_mcp", "mcpaql_adapted"] as const) {
+    const issueCreate = mustFindAllocation(setup.allocations, "issue-create-basic", configId);
+    assert.match(String(verifierParams(issueCreate).q), /in:title/);
+    assert.doesNotMatch(String(verifierParams(issueCreate).q), /label:benchmark/);
+    assert.equal(verifierExpected(issueCreate, "expectedTextIncludes"), `Benchmark issue ${String(issueCreate.variables.RUN_ID)}`);
+
+    const labeledIssueCreate = mustFindAllocation(setup.allocations, "issue-create-with-labels", configId);
+    assert.match(String(verifierParams(labeledIssueCreate).q), /in:title/);
+    assert.match(String(verifierParams(labeledIssueCreate).q), /label:benchmark/);
+    assert.match(String(verifierParams(labeledIssueCreate).q), /label:bug/);
+    assert.equal(verifierExpected(labeledIssueCreate, "expectedTextIncludes"), `Labeled benchmark ${String(labeledIssueCreate.variables.RUN_ID)}`);
+
     const reviewer = mustFindAllocation(setup.allocations, "error-pr-reviewer-invalid", configId);
     assert.equal(verifierParams(reviewer).pull_number, reviewer.variables.FIXTURE_PULL_NUMBER);
     assert.equal(verifierExpected(reviewer, "expectedTextIncludes"), reviewer.variables.GITHUB_BENCHMARK_REVIEWER);
 
     const label = mustFindAllocation(setup.allocations, "error-label-add-invalid", configId);
-    assert.equal(verifierParams(label).issue_number, label.variables.FIXTURE_ISSUE_NUMBER);
+    assert.match(String(verifierParams(label).q), /label:benchmark/);
+    assert.equal(verifierExpected(label, "expectedTextIncludes"), label.variables.RUN_ID);
 
     const comment = mustFindAllocation(setup.allocations, "issue-comment", configId);
     assert.equal(verifierOperation(comment), "search_issues");
@@ -128,16 +142,17 @@ test("GitHub fixture setup seeds branch fixtures, isolates file reads, and inclu
     assert.match(String(verifierExpected(comment, "expectedTextIncludes")), /issue-comment/);
 
     const assign = mustFindAllocation(setup.allocations, "issue-assign", configId);
-    assert.equal(verifierParams(assign).issue_number, assign.variables.FIXTURE_ISSUE_NUMBER);
-    assert.equal(verifierExpected(assign, "expectedTextIncludes"), assign.variables.GITHUB_BENCHMARK_ASSIGNEE);
+    assert.match(String(verifierParams(assign).q), new RegExp(`assignee:${String(assign.variables.GITHUB_BENCHMARK_ASSIGNEE)}`));
+    assert.equal(verifierExpected(assign, "expectedTextIncludes"), assign.variables.RUN_ID);
 
     const labelAdd = mustFindAllocation(setup.allocations, "issue-label-add", configId);
-    assert.equal(verifierParams(labelAdd).issue_number, labelAdd.variables.FIXTURE_ISSUE_NUMBER);
-    assert.equal(verifierExpected(labelAdd, "expectedTextIncludes"), "benchmark");
+    assert.match(String(verifierParams(labelAdd).q), /label:benchmark/);
+    assert.equal(verifierExpected(labelAdd, "expectedTextIncludes"), labelAdd.variables.RUN_ID);
 
     const labelRemove = mustFindAllocation(setup.allocations, "issue-label-remove", configId);
-    assert.equal(verifierParams(labelRemove).issue_number, labelRemove.variables.FIXTURE_ISSUE_NUMBER);
-    assert.equal(verifierExpected(labelRemove, "expectedTextExcludes"), "needs-review");
+    assert.match(String(verifierParams(labelRemove).q), /label:benchmark/);
+    assert.match(String(verifierParams(labelRemove).q), /-label:needs-review/);
+    assert.equal(verifierExpected(labelRemove, "expectedTextIncludes"), labelRemove.variables.RUN_ID);
 
     const title = mustFindAllocation(setup.allocations, "issue-update-title", configId);
     assert.equal(verifierParams(title).issue_number, title.variables.FIXTURE_ISSUE_NUMBER);
@@ -217,6 +232,34 @@ test("GitHub benchmark marks failed fixture allocations as task errors", async (
 
 async function writeManifest(manifestPath: string, taskIds?: string[]): Promise<void> {
   const tasks = [
+    {
+      id: "issue-create-basic",
+      taskType: "issue_create",
+      prompt: "Create an issue titled 'Benchmark issue ${RUN_ID}'.",
+      expectedFirstTool: {
+        rawMcp: "create_issue",
+        mcpaqlAdapted: "mcp_aql_create",
+      },
+      expectedOperation: "issue_create",
+      requiresFixture: [],
+      mutation: true,
+      inducedError: { enabled: false },
+      expectedRawMethod: null,
+    },
+    {
+      id: "issue-create-with-labels",
+      taskType: "issue_create",
+      prompt: "Create an issue titled 'Labeled benchmark ${RUN_ID}' with the benchmark and bug labels.",
+      expectedFirstTool: {
+        rawMcp: "create_issue",
+        mcpaqlAdapted: "mcp_aql_create",
+      },
+      expectedOperation: "issue_create",
+      requiresFixture: ["label"],
+      mutation: true,
+      inducedError: { enabled: false },
+      expectedRawMethod: null,
+    },
     {
       id: "issue-close",
       taskType: "issue_update",
