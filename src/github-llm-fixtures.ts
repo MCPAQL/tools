@@ -846,7 +846,7 @@ function buildCompletionVerifier(
     };
     rawArgs = params;
     if (task.id === "pull-comments") verifierExtra = { expectedTextIncludes: expectedReviewComment(String(variables.RUN_ID ?? "")) };
-    if (task.id === "pull-merge") verifierExtra = { expectedTextIncludes: "merged" };
+    if (task.id === "pull-merge") verifierExtra = { expectedTextIncludes: expectedMergedPullState() };
   } else if (task.id === "branch-create" || task.id === "error-branch-create-existing") {
     operation = "list_branches";
     rawTool = "list_branches";
@@ -908,7 +908,7 @@ function taskSpecificVerifier(
         query: task.id === "issue-comment"
           ? `repo:${owner}/${repo} "benchmark comment" "${String(variables.RUN_ID)}" in:comments`
           : `repo:${owner}/${repo} "benchmark recovery" in:comments`,
-      }, { expectedTextIncludes: task.id === "issue-comment" ? String(variables.RUN_ID) : "benchmark recovery" });
+      }, { expectedTextIncludes: task.id === "issue-comment" ? String(variables.RUN_ID) : String(variables.FIXTURE_ISSUE_NUMBER) });
     case "issue-assign":
       return args("search_issues", "search_issues", {
         ...common,
@@ -1036,6 +1036,10 @@ function expectedFileRecoveryLine(runId: string): string {
 
 function expectedReviewComment(runId: string): string {
   return `Benchmark review comment ${runId}`;
+}
+
+function expectedMergedPullState(): string {
+  return `"merged":true`;
 }
 
 function pullHeadFilter(owner: string, branch: string): string {

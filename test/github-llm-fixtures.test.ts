@@ -187,7 +187,7 @@ test("GitHub fixture setup seeds branch fixtures, isolates file reads, and inclu
     const recoveryComment = mustFindAllocation(setup.allocations, "error-issue-comment-wrong-number", configId);
     assert.match(String(verifierParams(recoveryComment).query), /benchmark recovery/);
     assert.doesNotMatch(String(verifierParams(recoveryComment).query), new RegExp(String(recoveryComment.variables.RUN_ID)));
-    assert.equal(verifierExpected(recoveryComment, "expectedTextIncludes"), "benchmark recovery");
+    assert.equal(verifierExpected(recoveryComment, "expectedTextIncludes"), String(recoveryComment.variables.FIXTURE_ISSUE_NUMBER));
 
     const requestReviewers = mustFindAllocation(setup.allocations, "pull-request-reviewers", configId);
     assert.equal(verifierParams(requestReviewers).pull_number, requestReviewers.variables.FIXTURE_PULL_NUMBER);
@@ -199,6 +199,10 @@ test("GitHub fixture setup seeds branch fixtures, isolates file reads, and inclu
     assert.equal(verifierParams(pullComments).pull_number, pullComments.variables.FIXTURE_PULL_NUMBER);
     assert.equal(verifierParams(pullComments).method, "get_review_comments");
     assert.equal(verifierExpected(pullComments, "expectedTextIncludes"), `Benchmark review comment ${String(pullComments.variables.RUN_ID)}`);
+
+    const pullMergeVerifier = mustFindAllocation(setup.allocations, "pull-merge", configId);
+    assert.equal(verifierParams(pullMergeVerifier).pull_number, pullMergeVerifier.variables.FIXTURE_MERGEABLE_PULL_NUMBER);
+    assert.equal(verifierExpected(pullMergeVerifier, "expectedTextIncludes"), `"merged":true`);
 
     const reviewComment = mustFindAllocation(setup.allocations, "pull-add-review-comment", configId);
     const reviewCommentResources = setup.createdResources.filter((resource) => reviewComment.createdResourceIds.includes(resource.id));
