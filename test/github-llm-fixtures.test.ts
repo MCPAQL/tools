@@ -152,6 +152,7 @@ test("GitHub fixture setup seeds branch fixtures, isolates file reads, and inclu
 
   for (const configId of ["raw_mcp", "mcpaql_adapted"] as const) {
     const pullNumberKey = configId === "raw_mcp" ? "pullNumber" : "pull_number";
+    const issueNumberKey = configId === "raw_mcp" ? "issueNumber" : "issue_number";
 
     const pullCreateVerifier = mustFindAllocation(setup.allocations, "pull-create", configId);
     assert.equal(verifierParams(pullCreateVerifier).head, `MCPAQL:${String(pullCreateVerifier.variables.FIXTURE_BRANCH)}`);
@@ -160,12 +161,14 @@ test("GitHub fixture setup seeds branch fixtures, isolates file reads, and inclu
     assert.match(String(verifierParams(issueCreate).query), /in:title/);
     assert.doesNotMatch(String(verifierParams(issueCreate).query), /label:benchmark/);
     assert.equal(verifierExpected(issueCreate, "expectedTextIncludes"), `Benchmark issue ${String(issueCreate.variables.RUN_ID)}`);
+    assert.deepEqual(verifierRetry(issueCreate), { attempts: 6, delayMs: 5000 });
 
     const labeledIssueCreate = mustFindAllocation(setup.allocations, "issue-create-with-labels", configId);
     assert.match(String(verifierParams(labeledIssueCreate).query), /in:title/);
     assert.match(String(verifierParams(labeledIssueCreate).query), /label:benchmark/);
     assert.match(String(verifierParams(labeledIssueCreate).query), /label:documentation/);
     assert.equal(verifierExpected(labeledIssueCreate, "expectedTextIncludes"), `Labeled benchmark ${String(labeledIssueCreate.variables.RUN_ID)}`);
+    assert.deepEqual(verifierRetry(labeledIssueCreate), { attempts: 6, delayMs: 5000 });
 
     const reviewer = mustFindAllocation(setup.allocations, "error-pr-reviewer-invalid", configId);
     assert.equal(verifierParams(reviewer)[pullNumberKey], reviewer.variables.FIXTURE_PULL_NUMBER);
@@ -194,10 +197,11 @@ test("GitHub fixture setup seeds branch fixtures, isolates file reads, and inclu
     assert.equal(verifierExpected(labelRemove, "expectedTextIncludes"), labelRemove.variables.RUN_ID);
 
     const title = mustFindAllocation(setup.allocations, "issue-update-title", configId);
-    assert.equal(verifierParams(title).issue_number, title.variables.FIXTURE_ISSUE_NUMBER);
+    assert.equal(verifierParams(title)[issueNumberKey], title.variables.FIXTURE_ISSUE_NUMBER);
     assert.equal(verifierExpected(title, "expectedTextIncludes"), `Benchmark title ${String(title.variables.RUN_ID)}`);
 
     const close = mustFindAllocation(setup.allocations, "issue-close", configId);
+    assert.equal(verifierParams(close)[issueNumberKey], close.variables.FIXTURE_ISSUE_NUMBER);
     assert.deepEqual(verifierJsonMatches(close), [{ path: "state", value: "closed" }]);
 
     const fileUpdate = mustFindAllocation(setup.allocations, "repo-file-update", configId);
@@ -804,6 +808,12 @@ function verifierJsonMatches(allocation: { completionVerifier?: unknown }): unkn
   assert.ok(allocation.completionVerifier && typeof allocation.completionVerifier === "object");
   const verifier = allocation.completionVerifier as Record<string, unknown>;
   return verifier.expectedJsonMatches;
+}
+
+function verifierRetry(allocation: { completionVerifier?: unknown }): unknown {
+  assert.ok(allocation.completionVerifier && typeof allocation.completionVerifier === "object");
+  const verifier = allocation.completionVerifier as Record<string, unknown>;
+  return verifier.retry;
 }
 
 class FailingIssueClient implements GitHubFixtureClient {

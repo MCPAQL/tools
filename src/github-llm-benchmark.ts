@@ -113,6 +113,10 @@ interface FixtureCompletionVerifier {
   toolName: string;
   arguments?: Record<string, unknown>;
   expectError?: boolean;
+  retry?: {
+    attempts: number;
+    delayMs: number;
+  };
   expectedTextIncludes?: string;
   expectedTextExcludes?: string;
   expectedJsonMatches?: Array<{
@@ -626,26 +630,36 @@ async function verifyStoppedTaskCompletion(
   }
 
   const verifier = context.completionVerifier;
-  const result = await withTimeout(
-    context.client.callTool({ name: verifier.toolName, arguments: verifier.arguments ?? {} }),
-    60_000,
-    `${context.configId} ${context.task.id} completion verifier ${verifier.toolName}`,
-  );
   const expectedError = verifier.expectError === true;
-  const ok = expectedError ? result.isError === true : result.isError !== true;
-  const verifierMatches = completionVerifierResultMatches(result, verifier);
-  await appendTranscript(context.transcriptPath, {
-    type: "completion_verifier_result",
-    taskId: context.task.id,
-    configId: context.configId,
-    runIndex: context.runIndex,
-    verifier: deepRedact(verifier),
-    result: deepRedact(result),
-    ok: ok && verifierMatches,
-  });
+  const attempts = Math.max(1, Math.floor(verifier.retry?.attempts ?? 1));
+  const delayMs = Math.max(0, Math.floor(verifier.retry?.delayMs ?? 0));
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    const result = await withTimeout(
+      context.client.callTool({ name: verifier.toolName, arguments: verifier.arguments ?? {} }),
+      60_000,
+      `${context.configId} ${context.task.id} completion verifier ${verifier.toolName}`,
+    );
+    const resultIsError = completionVerifierResultIsError(result);
+    const ok = expectedError ? resultIsError : !resultIsError;
+    const verifierMatches = completionVerifierResultMatches(result, verifier);
+    await appendTranscript(context.transcriptPath, {
+      type: "completion_verifier_result",
+      taskId: context.task.id,
+      configId: context.configId,
+      runIndex: context.runIndex,
+      verifier: deepRedact(verifier),
+      result: deepRedact(result),
+      attempt,
+      attempts,
+      ok: ok && verifierMatches,
+    });
 
-  if (ok && verifierMatches) {
-    return { outcome: "completed" };
+    if (ok && verifierMatches) {
+      return { outcome: "completed" };
+    }
+    if (attempt < attempts && delayMs > 0) {
+      await sleep(delayMs);
+    }
   }
   return {
     outcome: "failed",
@@ -1189,6 +1203,13 @@ export function completionVerifierResultMatches(
   return textMatches && textExcludes && jsonMatches;
 }
 
+export function completionVerifierResultIsError(result: unknown): boolean {
+  return completionVerifierPayloadCandidates(result).some((candidate) => {
+    if (!isRecord(candidate)) return false;
+    return candidate.isError === true || candidate.is_error === true || candidate.success === false;
+  });
+}
+
 function completionVerifierPayloadCandidates(value: unknown, depth = 0, candidates: unknown[] = []): unknown[] {
   if (depth > 5) return candidates;
   candidates.push(value);
@@ -1231,6 +1252,10 @@ function readJsonPathValues(value: unknown, pathExpression: string): unknown[] {
     values = next.filter((entry) => entry !== undefined);
   }
   return values;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function estimateTokens(value: unknown): number {

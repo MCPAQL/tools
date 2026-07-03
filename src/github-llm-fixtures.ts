@@ -102,6 +102,10 @@ interface FixtureCompletionVerifier {
   toolName: string;
   arguments?: Record<string, unknown>;
   expectError?: boolean;
+  retry?: {
+    attempts: number;
+    delayMs: number;
+  };
   expectedTextIncludes?: string;
   expectedTextExcludes?: string;
   expectedJsonMatches?: Array<{
@@ -109,6 +113,11 @@ interface FixtureCompletionVerifier {
     value: unknown;
   }>;
 }
+
+const SEARCH_COMPLETION_RETRY = {
+  attempts: 6,
+  delayMs: 5_000,
+};
 
 export interface FixtureResource {
   id: string;
@@ -863,12 +872,15 @@ function buildCompletionVerifier(
       query: expectedCreatedIssueQuery(task.id, String(variables.RUN_ID ?? ""), owner, repo),
     };
     rawArgs = params;
-    verifierExtra = { expectedTextIncludes: expectedCreatedIssueTitle(task.id, String(variables.RUN_ID ?? "")) };
+    verifierExtra = {
+      expectedTextIncludes: expectedCreatedIssueTitle(task.id, String(variables.RUN_ID ?? "")),
+      retry: SEARCH_COMPLETION_RETRY,
+    };
   } else if (task.id.includes("issue") && Number.isFinite(issueNumber)) {
     operation = "issue_read";
     rawTool = "issue_read";
     params = { ...common, method: "get", issue_number: issueNumber };
-    rawArgs = params;
+    rawArgs = { ...common, method: "get", issueNumber };
     if (task.id === "issue-close") verifierExtra = { expectedJsonMatches: [{ path: "state", value: "closed" }] };
     if (task.id === "issue-reopen") verifierExtra = { expectedJsonMatches: [{ path: "state", value: "open" }] };
     if (task.id === "issue-update-title") verifierExtra = { expectedTextIncludes: expectedUpdatedIssueTitle(String(variables.RUN_ID ?? "")) };

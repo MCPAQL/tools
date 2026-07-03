@@ -4,7 +4,11 @@ import path from "node:path";
 import { tmpdir } from "node:os";
 import { setTimeout as sleep } from "node:timers/promises";
 import test from "node:test";
-import { completionVerifierResultMatches, runGitHubLlmBenchmark } from "../src/github-llm-benchmark.js";
+import {
+  completionVerifierResultIsError,
+  completionVerifierResultMatches,
+  runGitHubLlmBenchmark,
+} from "../src/github-llm-benchmark.js";
 import { buildLlmMetricsReport, loadLlmMetricsInput } from "../src/parity/llm-metrics.js";
 
 test("GitHub LLM benchmark dry-run emits normalizable metrics input and artifacts", async () => {
@@ -237,6 +241,37 @@ test("GitHub LLM benchmark completion verifier checks parsed MCP text JSON", () 
     ),
     false,
   );
+});
+
+test("GitHub LLM benchmark completion verifier detects adapter-wrapped errors", () => {
+  const adaptedNotFound = {
+    content: [{
+      type: "text",
+      text: JSON.stringify({
+        success: true,
+        data: {
+          is_error: true,
+          content: [{ type: "text", text: "Not Found" }],
+        },
+      }),
+    }],
+  };
+  const adaptedSuccess = {
+    content: [{
+      type: "text",
+      text: JSON.stringify({
+        success: true,
+        data: {
+          is_error: false,
+          content: [{ type: "text", text: "ok" }],
+        },
+      }),
+    }],
+  };
+
+  assert.equal(completionVerifierResultIsError({ isError: true }), true);
+  assert.equal(completionVerifierResultIsError(adaptedNotFound), true);
+  assert.equal(completionVerifierResultIsError(adaptedSuccess), false);
 });
 
 test("GitHub LLM benchmark rejects wildcard fixture allocations for mutable tasks", async () => {
