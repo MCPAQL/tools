@@ -1003,7 +1003,7 @@ function taskSpecificVerifier(
         ...common,
         method: "get_reviews",
         pull_number: Number(variables.FIXTURE_PULL_NUMBER),
-      }, { expectedTextIncludes: `Pending benchmark review for ${String(variables.RUN_ID)}` }, {
+      }, { expectedJsonMatches: [{ path: "*.state", value: "COMMENTED" }] }, {
         ...common,
         method: "get_reviews",
         pullNumber: Number(variables.FIXTURE_PULL_NUMBER),

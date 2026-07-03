@@ -260,7 +260,7 @@ test("GitHub fixture setup seeds branch fixtures, isolates file reads, and inclu
     assert.ok(submitReviewResources.some((resource) => resource.type === "pending_review" && resource.teardown === "delete"));
     assert.equal(verifierParams(submitReview)[pullNumberKey], submitReview.variables.FIXTURE_PULL_NUMBER);
     assert.equal(verifierParams(submitReview).method, "get_reviews");
-    assert.equal(verifierExpected(submitReview, "expectedTextIncludes"), `Pending benchmark review for ${String(submitReview.variables.RUN_ID)}`);
+    assert.deepEqual(verifierJsonMatches(submitReview), [{ path: "*.state", value: "COMMENTED" }]);
   }
 });
 
