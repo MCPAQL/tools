@@ -556,11 +556,16 @@ async function createIssueFixture(
   kind: string,
   options: { labels?: string[]; assignees?: string[] },
 ): Promise<{ number: number; resourceId: string }> {
+  const isTitleMutationFixture = context.task.id === "issue-update-title";
   const issue = await context.client.createIssue({
     owner: context.owner,
     repo: context.repo,
-    title: `Benchmark fixture ${kind} ${context.runId}`,
-    body: `Disposable benchmark fixture for ${context.task.id} ${context.configId} run ${context.runIndex}.`,
+    title: isTitleMutationFixture
+      ? `Benchmark fixture ${kind} title seed ${context.configId} ${context.runIndex}`
+      : `Benchmark fixture ${kind} ${context.runId}`,
+    body: isTitleMutationFixture
+      ? `Disposable benchmark fixture for ${context.task.id} before title mutation.`
+      : `Disposable benchmark fixture for ${context.task.id} ${context.configId} run ${context.runIndex}.`,
     labels: options.labels,
     assignees: options.assignees,
   });
@@ -770,7 +775,7 @@ function buildCompletionVerifier(
     rawArgs = params;
     if (task.id === "issue-close") verifierExtra = { expectedTextIncludes: "closed" };
     if (task.id === "issue-reopen") verifierExtra = { expectedTextIncludes: "open" };
-    if (task.id === "issue-update-title") verifierExtra = { expectedTextIncludes: String(variables.RUN_ID ?? "") };
+    if (task.id === "issue-update-title") verifierExtra = { expectedTextIncludes: expectedUpdatedIssueTitle(String(variables.RUN_ID ?? "")) };
   } else if (task.id === "pull-create") {
     operation = "list_pull_requests";
     rawTool = "list_pull_requests";
@@ -796,9 +801,8 @@ function buildCompletionVerifier(
     params = { ...common, path: targetPath };
     rawArgs = params;
     if (task.id === "repo-file-delete") verifierExtra = { expectError: true };
-    if (task.id === "repo-file-update" || task.id === "error-file-update-stale-sha") {
-      verifierExtra = { expectedTextIncludes: String(variables.RUN_ID ?? "") };
-    }
+    if (task.id === "repo-file-update") verifierExtra = { expectedTextIncludes: expectedFileUpdateLine(String(variables.RUN_ID ?? "")) };
+    if (task.id === "error-file-update-stale-sha") verifierExtra = { expectedTextIncludes: expectedFileRecoveryLine(String(variables.RUN_ID ?? "")) };
   } else if (task.id.includes("release") && tag) {
     operation = "get_release_by_tag";
     rawTool = "get_release_by_tag";
@@ -842,8 +846,10 @@ function taskSpecificVerifier(
     case "error-issue-comment-wrong-number":
       return args("search_issues", "search_issues", {
         ...common,
-        q: `repo:${owner}/${repo} "benchmark ${task.id === "issue-comment" ? "comment" : "recovery"}" "${String(variables.RUN_ID)}" in:comments`,
-      }, { expectedTextIncludes: String(variables.RUN_ID) });
+        q: task.id === "issue-comment"
+          ? `repo:${owner}/${repo} "benchmark comment" "${String(variables.RUN_ID)}" in:comments`
+          : `repo:${owner}/${repo} "benchmark recovery" in:comments`,
+      }, { expectedTextIncludes: task.id === "issue-comment" ? String(variables.RUN_ID) : "benchmark recovery" });
     case "issue-assign":
       return args("issue_read", "issue_read", {
         ...common,
@@ -864,12 +870,30 @@ function taskSpecificVerifier(
       }, { expectedTextExcludes: "needs-review" });
     case "pull-list-open":
       return args("list_pull_requests", "list_pull_requests", { ...common, state: "open" });
+    case "pull-request-reviewers":
+      return args("pull_request_read", "pull_request_read", {
+        ...common,
+        method: "get",
+        pull_number: Number(variables.FIXTURE_PULL_NUMBER),
+      }, { expectedTextIncludes: String(variables.GITHUB_BENCHMARK_REVIEWER) });
+    case "pull-add-review-comment":
+      return args("pull_request_read", "pull_request_read", {
+        ...common,
+        method: "get_review_comments",
+        pull_number: Number(variables.FIXTURE_PULL_NUMBER),
+      }, { expectedTextIncludes: expectedReviewComment(String(variables.RUN_ID)) });
+    case "pull-submit-review":
+      return args("pull_request_read", "pull_request_read", {
+        ...common,
+        method: "get_reviews",
+        pull_number: Number(variables.FIXTURE_PULL_NUMBER),
+      }, { expectedTextIncludes: `Pending benchmark review for ${String(variables.RUN_ID)}` });
     case "error-pr-reviewer-invalid":
       return args("pull_request_read", "pull_request_read", {
         ...common,
         method: "get",
         pull_number: Number(variables.FIXTURE_PULL_NUMBER),
-      });
+      }, { expectedTextIncludes: String(variables.GITHUB_BENCHMARK_REVIEWER) });
     case "error-label-add-invalid":
       return args("issue_read", "issue_read", {
         ...common,
@@ -936,6 +960,22 @@ function expectedCreatedIssueTitle(taskId: string, runId: string): string {
   if (taskId === "issue-create-with-labels") return `Labeled benchmark ${runId}`;
   if (taskId === "error-issue-create-missing-title") return `benchmark recovery ${runId}`;
   return `Benchmark issue ${runId}`;
+}
+
+function expectedUpdatedIssueTitle(runId: string): string {
+  return `Benchmark title ${runId}`;
+}
+
+function expectedFileUpdateLine(runId: string): string {
+  return `Benchmark update ${runId}`;
+}
+
+function expectedFileRecoveryLine(runId: string): string {
+  return `Benchmark recovery ${runId}`;
+}
+
+function expectedReviewComment(runId: string): string {
+  return `Benchmark review comment ${runId}`;
 }
 
 function endpointForOperation(task: GitHubBenchmarkTask, operation: string): string {

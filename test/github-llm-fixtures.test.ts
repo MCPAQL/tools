@@ -76,13 +76,20 @@ test("GitHub fixture setup seeds branch fixtures, isolates file reads, and inclu
   const artifactRoot = path.join(root, "artifacts", "github-llm-benchmark");
   const setupPath = path.join(artifactRoot, "fixtures", "setup.json");
   await writeManifest(manifestPath, [
+    "issue-update-title",
     "pull-create",
+    "pull-request-reviewers",
+    "pull-add-review-comment",
+    "pull-submit-review",
     "repo-file-read",
+    "repo-file-update",
     "issue-comment",
     "issue-assign",
     "issue-label-add",
     "issue-label-remove",
+    "error-issue-comment-wrong-number",
     "error-pr-reviewer-invalid",
+    "error-file-update-stale-sha",
     "error-label-add-invalid",
   ]);
 
@@ -110,6 +117,7 @@ test("GitHub fixture setup seeds branch fixtures, isolates file reads, and inclu
   for (const configId of ["raw_mcp", "mcpaql_adapted"] as const) {
     const reviewer = mustFindAllocation(setup.allocations, "error-pr-reviewer-invalid", configId);
     assert.equal(verifierParams(reviewer).pull_number, reviewer.variables.FIXTURE_PULL_NUMBER);
+    assert.equal(verifierExpected(reviewer, "expectedTextIncludes"), reviewer.variables.GITHUB_BENCHMARK_REVIEWER);
 
     const label = mustFindAllocation(setup.allocations, "error-label-add-invalid", configId);
     assert.equal(verifierParams(label).issue_number, label.variables.FIXTURE_ISSUE_NUMBER);
@@ -130,6 +138,37 @@ test("GitHub fixture setup seeds branch fixtures, isolates file reads, and inclu
     const labelRemove = mustFindAllocation(setup.allocations, "issue-label-remove", configId);
     assert.equal(verifierParams(labelRemove).issue_number, labelRemove.variables.FIXTURE_ISSUE_NUMBER);
     assert.equal(verifierExpected(labelRemove, "expectedTextExcludes"), "needs-review");
+
+    const title = mustFindAllocation(setup.allocations, "issue-update-title", configId);
+    assert.equal(verifierParams(title).issue_number, title.variables.FIXTURE_ISSUE_NUMBER);
+    assert.equal(verifierExpected(title, "expectedTextIncludes"), `Benchmark title ${String(title.variables.RUN_ID)}`);
+
+    const fileUpdate = mustFindAllocation(setup.allocations, "repo-file-update", configId);
+    assert.equal(verifierParams(fileUpdate).path, fileUpdate.variables.FIXTURE_FILE_PATH);
+    assert.equal(verifierExpected(fileUpdate, "expectedTextIncludes"), `Benchmark update ${String(fileUpdate.variables.RUN_ID)}`);
+
+    const fileRecovery = mustFindAllocation(setup.allocations, "error-file-update-stale-sha", configId);
+    assert.equal(verifierParams(fileRecovery).path, fileRecovery.variables.FIXTURE_FILE_PATH);
+    assert.equal(verifierExpected(fileRecovery, "expectedTextIncludes"), `Benchmark recovery ${String(fileRecovery.variables.RUN_ID)}`);
+
+    const recoveryComment = mustFindAllocation(setup.allocations, "error-issue-comment-wrong-number", configId);
+    assert.match(String(verifierParams(recoveryComment).q), /benchmark recovery/);
+    assert.doesNotMatch(String(verifierParams(recoveryComment).q), new RegExp(String(recoveryComment.variables.RUN_ID)));
+    assert.equal(verifierExpected(recoveryComment, "expectedTextIncludes"), "benchmark recovery");
+
+    const requestReviewers = mustFindAllocation(setup.allocations, "pull-request-reviewers", configId);
+    assert.equal(verifierParams(requestReviewers).pull_number, requestReviewers.variables.FIXTURE_PULL_NUMBER);
+    assert.equal(verifierExpected(requestReviewers, "expectedTextIncludes"), requestReviewers.variables.GITHUB_BENCHMARK_REVIEWER);
+
+    const reviewComment = mustFindAllocation(setup.allocations, "pull-add-review-comment", configId);
+    assert.equal(verifierParams(reviewComment).pull_number, reviewComment.variables.FIXTURE_PULL_NUMBER);
+    assert.equal(verifierParams(reviewComment).method, "get_review_comments");
+    assert.equal(verifierExpected(reviewComment, "expectedTextIncludes"), `Benchmark review comment ${String(reviewComment.variables.RUN_ID)}`);
+
+    const submitReview = mustFindAllocation(setup.allocations, "pull-submit-review", configId);
+    assert.equal(verifierParams(submitReview).pull_number, submitReview.variables.FIXTURE_PULL_NUMBER);
+    assert.equal(verifierParams(submitReview).method, "get_reviews");
+    assert.equal(verifierExpected(submitReview, "expectedTextIncludes"), `Pending benchmark review for ${String(submitReview.variables.RUN_ID)}`);
   }
 });
 
@@ -208,6 +247,21 @@ async function writeManifest(manifestPath: string, taskIds?: string[]): Promise<
       expectedRawMethod: null,
     },
     {
+      id: "issue-update-title",
+      taskType: "issue_update",
+      prompt: "Update issue ${FIXTURE_ISSUE_NUMBER} so its title is exactly 'Benchmark title ${RUN_ID}'.",
+      expectedFirstTool: {
+        rawMcp: "update_issue_title",
+        mcpaqlAdapted: "mcp_aql_update",
+      },
+      expectedOperation: "issue_write",
+      requiresFixture: ["issue"],
+      mutation: true,
+      inducedError: { enabled: false },
+      expectedRawMethod: null,
+      expectedAdaptedMethod: "update",
+    },
+    {
       id: "issue-assign",
       taskType: "issue_update",
       prompt: "Assign issue ${FIXTURE_ISSUE_NUMBER} to ${GITHUB_BENCHMARK_ASSIGNEE}.",
@@ -253,6 +307,49 @@ async function writeManifest(manifestPath: string, taskIds?: string[]): Promise<
       expectedAdaptedMethod: "update",
     },
     {
+      id: "pull-request-reviewers",
+      taskType: "pull_request_update",
+      prompt: "Request review from ${GITHUB_BENCHMARK_REVIEWER} on pull request ${FIXTURE_PULL_NUMBER}.",
+      expectedFirstTool: {
+        rawMcp: "update_pull_request",
+        mcpaqlAdapted: "mcp_aql_update",
+      },
+      expectedOperation: "update_pull_request",
+      requiresFixture: ["pull_request", "reviewer"],
+      mutation: true,
+      inducedError: { enabled: false },
+      expectedRawMethod: null,
+    },
+    {
+      id: "pull-add-review-comment",
+      taskType: "pull_request_update",
+      prompt: "Add a review comment to the pending review for pull request ${FIXTURE_PULL_NUMBER} on ${FIXTURE_CHANGED_FILE} with body 'Benchmark review comment ${RUN_ID}'.",
+      expectedFirstTool: {
+        rawMcp: "add_comment_to_pending_review",
+        mcpaqlAdapted: "mcp_aql_create",
+      },
+      expectedOperation: "add_comment_to_pending_review",
+      requiresFixture: ["pending_review", "changed_file"],
+      mutation: true,
+      inducedError: { enabled: false },
+      expectedRawMethod: null,
+    },
+    {
+      id: "pull-submit-review",
+      taskType: "pull_request_update",
+      prompt: "Submit the pending comment-only review on pull request ${FIXTURE_PULL_NUMBER}.",
+      expectedFirstTool: {
+        rawMcp: "pull_request_review_write",
+        mcpaqlAdapted: "mcp_aql_update",
+      },
+      expectedOperation: "pull_request_review_write",
+      requiresFixture: ["pending_review"],
+      mutation: true,
+      inducedError: { enabled: false },
+      expectedRawMethod: "submit_pending",
+      expectedAdaptedMethod: "submit_pending",
+    },
+    {
       id: "pull-create",
       taskType: "pull_request_create",
       prompt: "Open a pull request from ${FIXTURE_BRANCH} into ${FIXTURE_BASE_BRANCH} titled 'Benchmark PR ${RUN_ID}'.",
@@ -295,6 +392,20 @@ async function writeManifest(manifestPath: string, taskIds?: string[]): Promise<
       expectedRawMethod: null,
     },
     {
+      id: "repo-file-update",
+      taskType: "content_update",
+      prompt: "Update ${FIXTURE_FILE_PATH} by appending the line 'Benchmark update ${RUN_ID}'.",
+      expectedFirstTool: {
+        rawMcp: "create_or_update_file",
+        mcpaqlAdapted: "mcp_aql_update",
+      },
+      expectedOperation: "create_or_update_file",
+      requiresFixture: ["file"],
+      mutation: true,
+      inducedError: { enabled: false },
+      expectedRawMethod: null,
+    },
+    {
       id: "error-pr-reviewer-invalid",
       taskType: "recovery_pull_request_update",
       prompt: "Request review from ${GITHUB_BENCHMARK_REVIEWER} on pull request ${FIXTURE_PULL_NUMBER}.",
@@ -308,6 +419,40 @@ async function writeManifest(manifestPath: string, taskIds?: string[]): Promise<
       inducedError: {
         enabled: true,
         errorCode: "INVALID_REVIEWER",
+      },
+      expectedRawMethod: null,
+    },
+    {
+      id: "error-issue-comment-wrong-number",
+      taskType: "recovery_issue_update",
+      prompt: "Comment on issue ${FIXTURE_ISSUE_NUMBER} with a benchmark recovery note.",
+      expectedFirstTool: {
+        rawMcp: "add_issue_comment",
+        mcpaqlAdapted: "mcp_aql_create",
+      },
+      expectedOperation: "add_issue_comment",
+      requiresFixture: ["issue"],
+      mutation: true,
+      inducedError: {
+        enabled: true,
+        errorCode: "NOT_FOUND",
+      },
+      expectedRawMethod: null,
+    },
+    {
+      id: "error-file-update-stale-sha",
+      taskType: "recovery_content_update",
+      prompt: "Update ${FIXTURE_FILE_PATH} by appending the line 'Benchmark recovery ${RUN_ID}'.",
+      expectedFirstTool: {
+        rawMcp: "create_or_update_file",
+        mcpaqlAdapted: "mcp_aql_update",
+      },
+      expectedOperation: "create_or_update_file",
+      requiresFixture: ["file"],
+      mutation: true,
+      inducedError: {
+        enabled: true,
+        errorCode: "STALE_SHA",
       },
       expectedRawMethod: null,
     },

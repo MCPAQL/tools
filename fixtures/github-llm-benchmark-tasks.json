@@ -147,7 +147,7 @@
     {
       "id": "issue-update-title",
       "taskType": "issue_update",
-      "prompt": "Update issue ${FIXTURE_ISSUE_NUMBER} so its title ends with '${RUN_ID}'.",
+      "prompt": "Update issue ${FIXTURE_ISSUE_NUMBER} so its title is exactly 'Benchmark title ${RUN_ID}'.",
       "expectedFirstTool": {
         "rawMcp": "update_issue_title",
         "mcpaqlAdapted": "mcp_aql_update"
@@ -393,7 +393,7 @@
     {
       "id": "pull-add-review-comment",
       "taskType": "pull_request_update",
-      "prompt": "Add a review comment to the pending review for pull request ${FIXTURE_PULL_NUMBER} on ${FIXTURE_CHANGED_FILE}.",
+      "prompt": "Add a review comment to the pending review for pull request ${FIXTURE_PULL_NUMBER} on ${FIXTURE_CHANGED_FILE} with body 'Benchmark review comment ${RUN_ID}'.",
       "expectedFirstTool": {
         "rawMcp": "add_comment_to_pending_review",
         "mcpaqlAdapted": "mcp_aql_create"
@@ -557,7 +557,7 @@
     {
       "id": "repo-file-update",
       "taskType": "content_update",
-      "prompt": "Update ${FIXTURE_FILE_PATH} by appending a benchmark line for ${RUN_ID}.",
+      "prompt": "Update ${FIXTURE_FILE_PATH} by appending the line 'Benchmark update ${RUN_ID}'.",
       "expectedFirstTool": {
         "rawMcp": "create_or_update_file",
         "mcpaqlAdapted": "mcp_aql_update"
@@ -853,7 +853,7 @@
     {
       "id": "error-file-update-stale-sha",
       "taskType": "recovery_content_update",
-      "prompt": "Update ${FIXTURE_FILE_PATH} by appending a benchmark recovery line for ${RUN_ID}.",
+      "prompt": "Update ${FIXTURE_FILE_PATH} by appending the line 'Benchmark recovery ${RUN_ID}'.",
       "expectedFirstTool": {
         "rawMcp": "create_or_update_file",
         "mcpaqlAdapted": "mcp_aql_update"
