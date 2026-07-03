@@ -125,7 +125,7 @@ test("GitHub fixture setup seeds branch fixtures, isolates file reads, and inclu
     const labeledIssueCreate = mustFindAllocation(setup.allocations, "issue-create-with-labels", configId);
     assert.match(String(verifierParams(labeledIssueCreate).q), /in:title/);
     assert.match(String(verifierParams(labeledIssueCreate).q), /label:benchmark/);
-    assert.match(String(verifierParams(labeledIssueCreate).q), /label:bug/);
+    assert.match(String(verifierParams(labeledIssueCreate).q), /label:documentation/);
     assert.equal(verifierExpected(labeledIssueCreate, "expectedTextIncludes"), `Labeled benchmark ${String(labeledIssueCreate.variables.RUN_ID)}`);
 
     const reviewer = mustFindAllocation(setup.allocations, "error-pr-reviewer-invalid", configId);
@@ -249,7 +249,7 @@ async function writeManifest(manifestPath: string, taskIds?: string[]): Promise<
     {
       id: "issue-create-with-labels",
       taskType: "issue_create",
-      prompt: "Create an issue titled 'Labeled benchmark ${RUN_ID}' with the benchmark and bug labels.",
+      prompt: "Create an issue titled 'Labeled benchmark ${RUN_ID}' with the benchmark and documentation labels.",
       expectedFirstTool: {
         rawMcp: "create_issue",
         mcpaqlAdapted: "mcp_aql_create",

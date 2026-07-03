@@ -962,7 +962,7 @@ function expectedCreatedIssueTitle(taskId: string, runId: string): string {
 }
 
 function expectedCreatedIssueQuery(taskId: string, runId: string, owner: string, repo: string): string {
-  const labelFilters = taskId === "issue-create-with-labels" ? " label:benchmark label:bug" : "";
+  const labelFilters = taskId === "issue-create-with-labels" ? " label:benchmark label:documentation" : "";
   return `repo:${owner}/${repo} is:issue in:title "${expectedCreatedIssueTitle(taskId, runId)}"${labelFilters}`;
 }
 
