@@ -141,11 +141,14 @@ test("GitHub fixture setup seeds branch fixtures, isolates file reads, and inclu
 
   const existingBranchRecovery = mustFindAllocation(setup.allocations, "error-branch-create-existing", "raw_mcp");
   const existingBranchResources = setup.createdResources.filter((resource) => existingBranchRecovery.createdResourceIds.includes(resource.id));
-  assert.ok(existingBranchResources.some((resource) =>
+  assert.equal(existingBranchResources.some((resource) =>
     resource.type === "branch" &&
       resource.metadata.branch === `benchmark-${String(existingBranchRecovery.variables.RUN_ID)}`
+  ), false);
+  assert.ok(existingBranchResources.some((resource) =>
+    resource.type === "expected_branch" &&
+      resource.metadata.branch === `benchmark-${String(existingBranchRecovery.variables.RUN_ID)}`
   ));
-  assert.equal(existingBranchResources.some((resource) => resource.type === "expected_branch"), false);
 
   const fileRead = mustFindAllocation(setup.allocations, "repo-file-read", "raw_mcp");
   assert.equal(fileRead.variables.FIXTURE_README_PATH, fileRead.variables.FIXTURE_FILE_PATH);

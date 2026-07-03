@@ -500,10 +500,6 @@ async function buildAllocation(context: AllocationBuilderContext): Promise<Fixtu
     variables.FIXTURE_CHANGED_FILE = branch.changedFile;
     createdResourceIds.push(...branch.resourceIds);
   }
-  if (context.task.id === "error-branch-create-existing") {
-    const branch = await createExistingBranchFixture(context);
-    createdResourceIds.push(branch.resourceId);
-  }
   if (required.has("pull_request") || required.has("pull_request_review_comment")) {
     const pull = await createPullRequestFixture(context, "pull-request");
     variables.FIXTURE_PULL_NUMBER = pull.pullNumber;
@@ -714,13 +710,6 @@ async function createBaseUpdateFixture(context: AllocationBuilderContext): Promi
   return { filePath: file.path, resourceId: resource.id };
 }
 
-async function createExistingBranchFixture(context: AllocationBuilderContext): Promise<{ branch: string; resourceId: string }> {
-  const branch = `benchmark-${context.runId}`;
-  await context.client.createBranch({ owner: context.owner, repo: context.repo, branch, sha: context.baseSha });
-  const resource = registerResource(context, "branch", "delete", { branch });
-  return { branch, resourceId: resource.id };
-}
-
 async function createPullRequestReviewCommentFixture(
   context: AllocationBuilderContext,
   pullNumber: number,
@@ -792,7 +781,7 @@ function registerExpectedModelResources(
       branch: context.baseBranch,
     }).id);
   }
-  if (context.task.id === "branch-create") {
+  if (context.task.id === "branch-create" || context.task.id === "error-branch-create-existing") {
     resourceIds.push(registerResource(context, "expected_branch", "delete", { branch: `benchmark-${context.runId}` }).id);
   }
   if (context.task.id === "repo-file-create") {
