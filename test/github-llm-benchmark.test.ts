@@ -4,7 +4,11 @@ import path from "node:path";
 import { tmpdir } from "node:os";
 import { setTimeout as sleep } from "node:timers/promises";
 import test from "node:test";
-import { runGitHubLlmBenchmark } from "../src/github-llm-benchmark.js";
+import {
+  completionVerifierResultIsError,
+  completionVerifierResultMatches,
+  runGitHubLlmBenchmark,
+} from "../src/github-llm-benchmark.js";
 import { buildLlmMetricsReport, loadLlmMetricsInput } from "../src/parity/llm-metrics.js";
 
 test("GitHub LLM benchmark dry-run emits normalizable metrics input and artifacts", async () => {
@@ -190,6 +194,84 @@ test("GitHub LLM benchmark dry-run honors single configuration selection", async
     stat(path.join(artifactRoot, "mcpaql-adapted", "tool-definitions.json")),
     /ENOENT/,
   );
+});
+
+test("GitHub LLM benchmark completion verifier checks parsed MCP text JSON", () => {
+  const mergedPullResult = {
+    content: [{ type: "text", text: JSON.stringify({ merged: true }) }],
+  };
+  const unmergedPullResult = {
+    content: [{ type: "text", text: JSON.stringify({ merged: false }) }],
+  };
+  const adaptedMergedPullResult = {
+    content: [{
+      type: "text",
+      text: JSON.stringify({
+        success: true,
+        data: {
+          content: [{ type: "text", text: JSON.stringify({ merged: true }) }],
+        },
+      }),
+    }],
+  };
+
+  assert.equal(
+    completionVerifierResultMatches(mergedPullResult, { expectedJsonMatches: [{ path: "merged", value: true }] }),
+    true,
+  );
+  assert.equal(
+    completionVerifierResultMatches(unmergedPullResult, { expectedJsonMatches: [{ path: "merged", value: true }] }),
+    false,
+  );
+  assert.equal(
+    completionVerifierResultMatches(adaptedMergedPullResult, { expectedJsonMatches: [{ path: "merged", value: true }] }),
+    true,
+  );
+  assert.equal(
+    completionVerifierResultMatches(
+      { content: [{ type: "text", text: JSON.stringify({ items: [{ number: 47, body: "benchmark recovery note" }] }) }] },
+      { expectedJsonMatches: [{ path: "items.*.number", value: 47 }] },
+    ),
+    true,
+  );
+  assert.equal(
+    completionVerifierResultMatches(
+      { content: [{ type: "text", text: JSON.stringify({ items: [{ number: 48, body: "benchmark recovery note" }] }) }] },
+      { expectedJsonMatches: [{ path: "items.*.number", value: 47 }] },
+    ),
+    false,
+  );
+});
+
+test("GitHub LLM benchmark completion verifier detects adapter-wrapped errors", () => {
+  const adaptedNotFound = {
+    content: [{
+      type: "text",
+      text: JSON.stringify({
+        success: true,
+        data: {
+          is_error: true,
+          content: [{ type: "text", text: "Not Found" }],
+        },
+      }),
+    }],
+  };
+  const adaptedSuccess = {
+    content: [{
+      type: "text",
+      text: JSON.stringify({
+        success: true,
+        data: {
+          is_error: false,
+          content: [{ type: "text", text: "ok" }],
+        },
+      }),
+    }],
+  };
+
+  assert.equal(completionVerifierResultIsError({ isError: true }), true);
+  assert.equal(completionVerifierResultIsError(adaptedNotFound), true);
+  assert.equal(completionVerifierResultIsError(adaptedSuccess), false);
 });
 
 test("GitHub LLM benchmark rejects wildcard fixture allocations for mutable tasks", async () => {

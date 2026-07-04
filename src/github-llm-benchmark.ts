@@ -99,19 +99,30 @@ interface FixtureAllocation {
   taskId?: string;
   configId?: LlmMetricConfigId;
   runIndex?: number;
+  status?: "ready" | "error";
   variables?: Record<string, unknown>;
   completionVerifier?: FixtureCompletionVerifier | Partial<Record<LlmMetricConfigId, FixtureCompletionVerifier>>;
   rawDataPaths?: {
     fixtures?: string[];
     other?: string[];
   };
+  error?: string;
 }
 
 interface FixtureCompletionVerifier {
   toolName: string;
   arguments?: Record<string, unknown>;
   expectError?: boolean;
+  retry?: {
+    attempts: number;
+    delayMs: number;
+  };
   expectedTextIncludes?: string;
+  expectedTextExcludes?: string;
+  expectedJsonMatches?: Array<{
+    path: string;
+    value: unknown;
+  }>;
 }
 
 interface ToolDefinition {
@@ -233,6 +244,23 @@ export async function runGitHubLlmBenchmark(options: GitHubLlmBenchmarkOptions):
         for (let runIndex = 0; runIndex < runsPerConfiguration; runIndex += 1) {
           const runId = `${task.id}-${configId}-${runIndex}`;
           const allocation = findFixtureAllocation(fixtureInput, task.id, configId, runIndex, task.mutation === true);
+          if (allocation?.status === "error") {
+            taskResults.push(await buildFixtureSetupErrorResult({
+              task,
+              configId,
+              runIndex,
+              artifactRoot,
+              configDir,
+              toolDefinitionsPath: toolDefinitionsPaths[configId],
+              fixturePaths: [
+                options.manifestPath,
+                ...(options.fixtureInputPath ? [options.fixtureInputPath] : []),
+                ...(allocation.rawDataPaths?.fixtures ?? []),
+              ],
+              error: allocation.error ?? "Fixture setup failed for this task/configuration/run.",
+            }));
+            continue;
+          }
           const variables = buildPromptVariables(task, configId, runIndex, runId, fixtureInput, allocation, dryRun);
           const prompt = substitutePrompt(task.prompt, variables, dryRun);
           const unresolved = findUnresolvedPlaceholders(prompt);
@@ -295,7 +323,7 @@ export async function runGitHubLlmBenchmark(options: GitHubLlmBenchmarkOptions):
           maxTurns: options.maxTurns ?? DEFAULT_MAX_TURNS,
           fixtureInputPath: options.fixtureInputPath,
           toolDefinitionTokenCounting: dryRun ? "mock-estimate" : "anthropic-count-tokens-minus-baseline",
-          fixtureAllocationContract: "Consumes optional variables/allocations from fixture setup output; fixture creation/reset is reserved for tools#30.",
+          fixtureAllocationContract: "Consumes optional variables/allocations from mcpaql-github-llm-fixtures setup output.",
         },
       },
       configurations: buildConfigurations(artifactRoot, configIds),
@@ -330,6 +358,73 @@ export async function runGitHubLlmBenchmark(options: GitHubLlmBenchmarkOptions):
   } finally {
     await closeClientsQuietly(clients);
   }
+}
+
+async function buildFixtureSetupErrorResult(input: {
+  task: GitHubBenchmarkTask;
+  configId: LlmMetricConfigId;
+  runIndex: number;
+  artifactRoot: string;
+  configDir: string;
+  toolDefinitionsPath: string;
+  fixturePaths: string[];
+  error: string;
+}): Promise<LlmTaskResult> {
+  const timestamp = new Date().toISOString();
+  const fileStem = sanitizeFileStem(`${input.task.id}-${input.configId}-${input.runIndex}`);
+  const transcriptPath = path.join(input.artifactRoot, input.configDir, "transcripts", `${fileStem}.jsonl`);
+  const logPath = path.join(input.artifactRoot, input.configDir, "logs", `${fileStem}.json`);
+  const promptPath = path.join(input.artifactRoot, input.configDir, "prompts", `${fileStem}.txt`);
+  await mkdir(path.dirname(promptPath), { recursive: true });
+  await writeFile(promptPath, `Fixture setup failed before prompt rendering: ${input.error}\n`, "utf8");
+  await appendTranscript(transcriptPath, {
+    type: "fixture_setup_error",
+    taskId: input.task.id,
+    configId: input.configId,
+    runIndex: input.runIndex,
+    error: input.error,
+    fixturePaths: input.fixturePaths,
+  });
+  await writeJsonFile(logPath, {
+    taskId: input.task.id,
+    configId: input.configId,
+    runIndex: input.runIndex,
+    outcome: "error",
+    firstCallSuccess: null,
+    turnsToCompletion: null,
+    tokensToCompletion: null,
+    startedAt: timestamp,
+    finishedAt: timestamp,
+    notes: `Fixture setup failed before model execution: ${input.error}`,
+  });
+  return {
+    taskId: input.task.id,
+    taskName: input.task.id,
+    configId: input.configId,
+    outcome: "error",
+    firstCallSuccess: null,
+    turnsToCompletion: null,
+    tokensToCompletion: null,
+    inducedError: input.task.inducedError?.enabled === true
+      ? {
+        injected: false,
+        recoveredWithinTwoTurns: null,
+        turnsToRecovery: null,
+        errorCode: input.task.inducedError.errorCode,
+        finalOutcome: "not_measured",
+      }
+      : { injected: false, finalOutcome: "not_measured" },
+    rawDataPaths: {
+      transcripts: [transcriptPath],
+      logs: [logPath],
+      prompts: [promptPath],
+      toolDefinitions: [input.toolDefinitionsPath],
+      fixtures: input.fixturePaths,
+    },
+    startedAt: timestamp,
+    finishedAt: timestamp,
+    notes: `Fixture setup failed before model execution: ${input.error}`,
+  };
 }
 
 async function runOneTask(context: RunContext): Promise<LlmTaskResult> {
@@ -535,28 +630,36 @@ async function verifyStoppedTaskCompletion(
   }
 
   const verifier = context.completionVerifier;
-  const result = await withTimeout(
-    context.client.callTool({ name: verifier.toolName, arguments: verifier.arguments ?? {} }),
-    60_000,
-    `${context.configId} ${context.task.id} completion verifier ${verifier.toolName}`,
-  );
   const expectedError = verifier.expectError === true;
-  const ok = expectedError ? result.isError === true : result.isError !== true;
-  const textMatches = verifier.expectedTextIncludes
-    ? JSON.stringify(result).includes(verifier.expectedTextIncludes)
-    : true;
-  await appendTranscript(context.transcriptPath, {
-    type: "completion_verifier_result",
-    taskId: context.task.id,
-    configId: context.configId,
-    runIndex: context.runIndex,
-    verifier: deepRedact(verifier),
-    result: deepRedact(result),
-    ok: ok && textMatches,
-  });
+  const attempts = Math.max(1, Math.floor(verifier.retry?.attempts ?? 1));
+  const delayMs = Math.max(0, Math.floor(verifier.retry?.delayMs ?? 0));
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    const result = await withTimeout(
+      context.client.callTool({ name: verifier.toolName, arguments: verifier.arguments ?? {} }),
+      60_000,
+      `${context.configId} ${context.task.id} completion verifier ${verifier.toolName}`,
+    );
+    const resultIsError = completionVerifierResultIsError(result);
+    const ok = expectedError ? resultIsError : !resultIsError;
+    const verifierMatches = completionVerifierResultMatches(result, verifier);
+    await appendTranscript(context.transcriptPath, {
+      type: "completion_verifier_result",
+      taskId: context.task.id,
+      configId: context.configId,
+      runIndex: context.runIndex,
+      verifier: deepRedact(verifier),
+      result: deepRedact(result),
+      attempt,
+      attempts,
+      ok: ok && verifierMatches,
+    });
 
-  if (ok && textMatches) {
-    return { outcome: "completed" };
+    if (ok && verifierMatches) {
+      return { outcome: "completed" };
+    }
+    if (attempt < attempts && delayMs > 0) {
+      await sleep(delayMs);
+    }
   }
   return {
     outcome: "failed",
@@ -1077,6 +1180,82 @@ function containsString(value: unknown, expected: string): boolean {
   if (Array.isArray(value)) return value.some((entry) => containsString(entry, expected));
   if (isRecord(value)) return Object.values(value).some((entry) => containsString(entry, expected));
   return false;
+}
+
+export function completionVerifierResultMatches(
+  result: unknown,
+  verifier: {
+    expectedTextIncludes?: string;
+    expectedTextExcludes?: string;
+    expectedJsonMatches?: Array<{ path: string; value: unknown }>;
+  },
+): boolean {
+  const resultText = JSON.stringify(result) ?? "";
+  const textMatches = verifier.expectedTextIncludes ? resultText.includes(verifier.expectedTextIncludes) : true;
+  const textExcludes = verifier.expectedTextExcludes ? !resultText.includes(verifier.expectedTextExcludes) : true;
+  const jsonMatches = verifier.expectedJsonMatches
+    ? verifier.expectedJsonMatches.every((expected) =>
+      completionVerifierPayloadCandidates(result).some((candidate) =>
+        readJsonPathValues(candidate, expected.path).some((value) => Object.is(value, expected.value))
+      )
+    )
+    : true;
+  return textMatches && textExcludes && jsonMatches;
+}
+
+export function completionVerifierResultIsError(result: unknown): boolean {
+  return completionVerifierPayloadCandidates(result).some((candidate) => {
+    if (!isRecord(candidate)) return false;
+    return candidate.isError === true || candidate.is_error === true || candidate.success === false;
+  });
+}
+
+function completionVerifierPayloadCandidates(value: unknown, depth = 0, candidates: unknown[] = []): unknown[] {
+  if (depth > 5) return candidates;
+  candidates.push(value);
+  if (!isRecord(value)) return candidates;
+
+  if ("structuredContent" in value) completionVerifierPayloadCandidates(value.structuredContent, depth + 1, candidates);
+  if ("structured_content" in value) completionVerifierPayloadCandidates(value.structured_content, depth + 1, candidates);
+  if ("data" in value) completionVerifierPayloadCandidates(value.data, depth + 1, candidates);
+
+  const content = value.content;
+  if (Array.isArray(content)) {
+    for (const entry of content) {
+      if (!isRecord(entry) || typeof entry.text !== "string") continue;
+      candidates.push(entry.text);
+      try {
+        completionVerifierPayloadCandidates(JSON.parse(entry.text), depth + 1, candidates);
+      } catch {
+        // Plain text MCP content is still available to text-based verifiers.
+      }
+    }
+  }
+  return candidates;
+}
+
+function readJsonPathValues(value: unknown, pathExpression: string): unknown[] {
+  let values = [value];
+  for (const segment of pathExpression.split(".")) {
+    const next: unknown[] = [];
+    for (const candidate of values) {
+      if (segment === "*") {
+        if (Array.isArray(candidate)) next.push(...candidate);
+        continue;
+      }
+      if (Array.isArray(candidate) && /^\d+$/.test(segment)) {
+        next.push(candidate[Number(segment)]);
+        continue;
+      }
+      if (isRecord(candidate) && segment in candidate) next.push(candidate[segment]);
+    }
+    values = next.filter((entry) => entry !== undefined);
+  }
+  return values;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function estimateTokens(value: unknown): number {

@@ -69,7 +69,7 @@ Run each task at least 10 times for each configuration.
 
 The manifest also declares `fixtureIsolation.policy: fresh_per_task_config_run`. Treat that as mandatory: every task/configuration/run tuple must receive a fresh fixture allocation or a reset to its pre-run state before the model starts.
 
-For mutation tasks, never reuse a target that may have been closed, deleted, merged, relabeled, assigned, submitted as a pending review, or otherwise changed by an earlier repeat. Create per-run fixture IDs such as `${TASK_ID}-${CONFIG_ID}-${RUN_INDEX}`, record them in `artifacts/github-llm-benchmark/fixtures/setup.json`, and tear them down after report generation. If fixture reset fails, mark that run `error` and do not continue collecting results against dirty state.
+For mutation tasks, never reuse a target that may have been closed, deleted, merged, relabeled, assigned, submitted as a pending review, or otherwise changed by an earlier repeat. Create per-run fixture IDs such as `${TASK_ID}-${CONFIG_ID}-${RUN_INDEX}`, record them in `artifacts/github-llm-benchmark/fixtures/setup.json`, and tear them down after report generation. If fixture reset fails, mark that run `error` and do not continue collecting results against dirty state. The live runner honors `status: "error"` fixture allocations by writing an `outcome: "error"` task result before any model call.
 
 Each fixture allocation may also include a task-specific `completionVerifier` tool call, either shared or keyed by `raw_mcp` / `mcpaql_adapted`. Live runs are marked `completed` only after the model uses the expected first tool, receives no final tool error, and this verifier confirms the requested disposable-repository state. If no verifier is provided, the live runner records the task as non-completed so aggregate turns/tokens are not inflated by a wrong-but-successful tool call. Dry-run mode is exempt because it validates artifact shape only.
 
@@ -162,13 +162,24 @@ bash scripts/check-github-llm-benchmark-env.sh
 Validate the live-runner artifact shape without credentials or live MCP/API calls:
 
 ```bash
+npm run github-llm-fixtures -- setup \
+  --dry-run \
+  --runs 1 \
+  --artifact-root /tmp/github-llm-benchmark-dry-run \
+  --output /tmp/github-llm-benchmark-dry-run/fixtures/setup.json
+
 npm run github-llm-benchmark -- \
   --dry-run \
   --runs 1 \
-  --task-limit 1 \
+  --fixtures /tmp/github-llm-benchmark-dry-run/fixtures/setup.json \
   --artifact-root /tmp/github-llm-benchmark-dry-run \
   --output /tmp/github-llm-benchmark-dry-run/metrics-input.json \
   --model mock-claude
+
+npm run github-llm-fixtures -- teardown \
+  --dry-run \
+  --setup /tmp/github-llm-benchmark-dry-run/fixtures/setup.json \
+  --output /tmp/github-llm-benchmark-dry-run/fixtures/teardown.json
 ```
 
 Dry-run output is synthetic shape-validation data only. Do not cite it as benchmark evidence.
@@ -184,7 +195,19 @@ npm run parity -- \
 
 The command above validates the report generator only. It is not a benchmark run.
 
-After tools#30 or a manual coordinator setup creates fresh disposable fixtures for every task/configuration/run tuple, capture live task results with:
+Create fresh disposable fixtures for every task/configuration/run tuple:
+
+```bash
+npm run github-llm-fixtures -- setup \
+  --manifest fixtures/github-llm-benchmark-tasks.json \
+  --artifact-root artifacts/github-llm-benchmark \
+  --output artifacts/github-llm-benchmark/fixtures/setup.json \
+  --runs 10
+```
+
+The fixture setup command uses `GITHUB_PERSONAL_ACCESS_TOKEN`, `GITHUB_BENCHMARK_OWNER`, `GITHUB_BENCHMARK_REPO`, `GITHUB_BENCHMARK_ASSIGNEE`, and `GITHUB_BENCHMARK_REVIEWER`. It creates labels, issues, branches, pull requests, files, releases, and pending reviews in the disposable repository as needed. If setup cannot provision a task/configuration/run tuple, it writes a failed allocation; the live runner records that tuple as `outcome: "error"` rather than collecting dirty-state benchmark data.
+
+Capture live task results with:
 
 ```bash
 npm run github-llm-benchmark -- \
@@ -197,7 +220,7 @@ npm run github-llm-benchmark -- \
   --model-version "$ANTHROPIC_MODEL_VERSION"
 ```
 
-The `--fixtures` file is the fixture-allocation handoff for tools#30. The live runner consumes fixture variables and raw fixture paths from that file, but it does not create, reset, or tear down disposable GitHub state.
+The `--fixtures` file is the fixture-allocation handoff. The live runner consumes fixture variables and raw fixture paths from that file, but it does not create, reset, or tear down disposable GitHub state.
 
 Once the live runner captures real task results into `artifacts/github-llm-benchmark/metrics-input.json`, normalize the final reports with:
 
@@ -218,26 +241,44 @@ node scripts/summarize-github-llm-task-types.mjs \
   artifacts/github-llm-benchmark/task-type-aggregates.md
 ```
 
-## Current Blocker
-
-As of this live-runner implementation pass, the local environment did not expose the required Anthropic model/API inputs, disposable GitHub token/repository inputs, raw MCP command, adapter paths, or `GITHUB_TOOLSETS`. GitHub CLI auth was present, but the benchmark runner needs explicit live benchmark environment variables and a fixture allocation file.
-
-Next command for the coordinator after credentials, adapter paths, model metadata, and disposable fixture allocation are available:
+After the reports above are generated and reviewed, tear down or archive disposable fixtures:
 
 ```bash
-ANTHROPIC_API_KEY=... \
-ANTHROPIC_MODEL=... \
-ANTHROPIC_MODEL_VERSION=... \
-GITHUB_PERSONAL_ACCESS_TOKEN=... \
-GITHUB_BENCHMARK_OWNER=... \
-GITHUB_BENCHMARK_REPO=... \
-GITHUB_BENCHMARK_ASSIGNEE=... \
-GITHUB_BENCHMARK_REVIEWER=... \
-MCPAQL_GITHUB_ADAPTER_SERVER=... \
-MCPAQL_GITHUB_ADAPTER_SCHEMA=... \
-MCPAQL_GITHUB_ADAPTER_PROVENANCE=... \
-RAW_GITHUB_MCP_COMMAND=... \
-GITHUB_TOOLSETS=default,actions,labels,git \
+npm run github-llm-fixtures -- teardown \
+  --setup artifacts/github-llm-benchmark/fixtures/setup.json \
+  --output artifacts/github-llm-benchmark/fixtures/teardown.json \
+  --continue-on-error
+```
+
+Review `artifacts/github-llm-benchmark/fixtures/teardown.json` before deleting local artifacts. Teardown closes issues and pull requests, deletes benchmark branches, files, releases, and tags where possible, and records skipped resources when the model never created an expected output.
+
+## Current Blocker
+
+As of the fixture-isolation implementation pass, the local environment still did not expose the required Anthropic model/API inputs, disposable GitHub token/repository inputs, raw MCP command, adapter paths, or `GITHUB_TOOLSETS`. GitHub CLI auth was present, but the live benchmark still needs explicit live benchmark environment variables and a disposable repository.
+
+Next command sequence for the coordinator after credentials, adapter paths, model metadata, and a disposable repository are available:
+
+```bash
+export ANTHROPIC_API_KEY=...
+export ANTHROPIC_MODEL=...
+export ANTHROPIC_MODEL_VERSION=...
+export GITHUB_PERSONAL_ACCESS_TOKEN=...
+export GITHUB_BENCHMARK_OWNER=...
+export GITHUB_BENCHMARK_REPO=...
+export GITHUB_BENCHMARK_ASSIGNEE=...
+export GITHUB_BENCHMARK_REVIEWER=...
+export MCPAQL_GITHUB_ADAPTER_SERVER=...
+export MCPAQL_GITHUB_ADAPTER_SCHEMA=...
+export MCPAQL_GITHUB_ADAPTER_PROVENANCE=...
+export RAW_GITHUB_MCP_COMMAND=...
+export GITHUB_TOOLSETS=default,actions,labels,git
+
+npm run github-llm-fixtures -- setup \
+  --manifest fixtures/github-llm-benchmark-tasks.json \
+  --artifact-root artifacts/github-llm-benchmark \
+  --output artifacts/github-llm-benchmark/fixtures/setup.json \
+  --runs 10
+
 npm run github-llm-benchmark -- \
   --manifest fixtures/github-llm-benchmark-tasks.json \
   --fixtures artifacts/github-llm-benchmark/fixtures/setup.json \
@@ -248,4 +289,13 @@ npm run github-llm-benchmark -- \
   --model-version "$ANTHROPIC_MODEL_VERSION"
 ```
 
-Keep the normalization and task-type aggregate commands as the final report-generation steps after the live runner finishes.
+Keep the normalization and task-type aggregate commands as the final report-generation steps after the live runner finishes, then run fixture teardown:
+
+```bash
+npm run github-llm-fixtures -- teardown \
+  --setup artifacts/github-llm-benchmark/fixtures/setup.json \
+  --output artifacts/github-llm-benchmark/fixtures/teardown.json \
+  --continue-on-error
+```
+
+Do not publish results until the coordinator has reviewed `metrics-input.json`, `llm-metrics.json`, task-type aggregates, setup/teardown records, and raw transcripts for evidence quality and secret safety.

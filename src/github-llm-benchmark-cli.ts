@@ -11,7 +11,7 @@ Options:
   --manifest <json>         Task manifest. Default: fixtures/github-llm-benchmark-tasks.json
   --output <json>           Metrics input JSON. Default: artifacts/github-llm-benchmark/metrics-input.json
   --artifact-root <dir>     Raw artifact root. Default: artifacts/github-llm-benchmark
-  --fixtures <json>         Optional fixture allocation/setup JSON from the future tools#30 lane
+  --fixtures <json>         Optional fixture allocation/setup JSON from mcpaql-github-llm-fixtures
   --runs <number>           Runs per task/configuration. Default: manifest runCountPerConfiguration
   --tasks <ids>             Comma-separated task ids to run
   --task-limit <number>     Run only the first N selected tasks
@@ -102,4 +102,3 @@ main().catch((error) => {
   console.error("FATAL:", error instanceof Error ? error.message : String(error));
   process.exit(1);
 });
-
