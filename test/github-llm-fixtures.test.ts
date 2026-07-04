@@ -185,6 +185,10 @@ test("GitHub fixture setup seeds branch fixtures, isolates file reads, and inclu
     assert.equal(verifierOperation(comment), "search_issues");
     assert.match(String(verifierParams(comment).query), /in:comments/);
     assert.match(String(verifierExpected(comment, "expectedTextIncludes")), /issue-comment/);
+    assert.deepEqual(verifierJsonMatches(comment), [{
+      path: "items.*.number",
+      value: Number(comment.variables.FIXTURE_ISSUE_NUMBER),
+    }]);
     assert.deepEqual(verifierRetry(comment), { attempts: 6, delayMs: 5000 });
 
     const assign = mustFindAllocation(setup.allocations, "issue-assign", configId);

@@ -959,7 +959,11 @@ function taskSpecificVerifier(
           ? `repo:${owner}/${repo} "benchmark comment" "${String(variables.RUN_ID)}" in:comments`
           : `repo:${owner}/${repo} "benchmark recovery" in:comments`,
       }, task.id === "issue-comment"
-        ? { expectedTextIncludes: String(variables.RUN_ID), retry: SEARCH_COMPLETION_RETRY }
+        ? {
+          expectedTextIncludes: String(variables.RUN_ID),
+          expectedJsonMatches: [{ path: "items.*.number", value: Number(variables.FIXTURE_ISSUE_NUMBER) }],
+          retry: SEARCH_COMPLETION_RETRY,
+        }
         : { expectedJsonMatches: [{ path: "items.*.number", value: Number(variables.FIXTURE_ISSUE_NUMBER) }], retry: SEARCH_COMPLETION_RETRY });
     case "issue-assign":
       return args("search_issues", "search_issues", {
