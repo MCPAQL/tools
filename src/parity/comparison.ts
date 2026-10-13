@@ -10,6 +10,8 @@ const VOLATILE_KEY_PATTERNS = [
   /^created_at$/i, /^updated_at$/i, /^pushed_at$/i, /^merged_at$/i, /^closed_at$/i, /^last_modified$/i,
   /^date$/i,
   /^x-github-/i, /^request_id$/i,
+  // Server-side timing fields differ between any two calls and carry no parity signal.
+  /(^|_)duration_ms$/i,
 ];
 
 export const WRITE_VARIANT_NORMALIZE_OPTIONS: NormalizeOptions = {

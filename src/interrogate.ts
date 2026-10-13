@@ -14,7 +14,7 @@ import type {
   InterrogationConfig,
   NormalizedOperation,
 } from "./types.js";
-import { deepRedact, normalizeSnakeCase, parseJsonText, withTimeout, writeJsonFile } from "./shared.js";
+import { deepRedact, normalizeSnakeCase, parseJsonText, resolveHeaderEnv, withTimeout, writeJsonFile } from "./shared.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -223,7 +223,7 @@ function normalizeTool(tool: RawTool, warnings: DiscoveryWarning[]): NormalizedO
 }
 
 async function resolveAuthHeaders(config: InterrogationConfig): Promise<Record<string, string>> {
-  const headers: Record<string, string> = { ...(config.headers ?? {}) };
+  const headers: Record<string, string> = resolveHeaderEnv(config.headers ?? {});
 
   if (!config.auth || config.auth.type !== "bearer") {
     return headers;

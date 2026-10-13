@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import { writeJsonFile } from "../shared.js";
+import { resolveHeaderEnv, writeJsonFile } from "../shared.js";
 import { DEFAULT_TIMEOUT_MS, loadAdapterMetadata, resolveAdapterPaths } from "./metadata.js";
 import { runOperation } from "./operation.js";
 import type { OpResult, RunOptions, RunReport, Suite } from "./types.js";
@@ -129,7 +129,7 @@ export function mergeOfficialExtraHeaders(
 ): Record<string, string> {
   const mergedHeaders = mergeHeadersCaseInsensitive(suiteHeaders, schemaHeaders);
   warnOnHeaderOverrides(suiteName, suiteHeaders, schemaHeaders);
-  return stripAuthorizationHeaders(suiteName, tokenEnv, mergedHeaders);
+  return resolveHeaderEnv(stripAuthorizationHeaders(suiteName, tokenEnv, mergedHeaders));
 }
 
 function mergeHeadersCaseInsensitive(

@@ -111,3 +111,27 @@ export function parseArgs(argv: string[]): Record<string, string> {
 
   return output;
 }
+
+// A header value of the exact form "${env:VAR_NAME}" is read from the environment, so
+// per-tenant identifiers (project or workspace ids) stay out of committed configs. The
+// placeholder, not the resolved value, is what lands in capture_config_redacted and is
+// carried into the generated adapter, which resolves it the same way at connect time.
+export function resolveHeaderEnv(
+  headers: Record<string, string>,
+  env: NodeJS.ProcessEnv = process.env,
+): Record<string, string> {
+  const resolved: Record<string, string> = {};
+  for (const [name, value] of Object.entries(headers)) {
+    const match = /^\$\{env:([A-Za-z_][A-Za-z0-9_]*)\}$/.exec(value);
+    if (!match) {
+      resolved[name] = value;
+      continue;
+    }
+    const envValue = env[match[1]];
+    if (!envValue) {
+      throw new Error(`Missing env var '${match[1]}' for header '${name}'.`);
+    }
+    resolved[name] = envValue;
+  }
+  return resolved;
+}
