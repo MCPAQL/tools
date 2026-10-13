@@ -65,6 +65,11 @@ export async function runDifferentialValidation(options: {
     bundlePath: options.bundlePath,
     expectedSchemaPath: options.expectedSchemaPath,
   });
+  const tenancy = await loadTenancy(options.expectedSchemaPath);
+  // Operations and parameters the generator adds for tenant switching (see adapter-generator tenancy).
+  const tenancyOperations = tenancy ? new Set([`get_active_${tenancy.noun}`, `set_active_${tenancy.noun}`]) : new Set<string>();
+  const tenancyParam = tenancy ? `${tenancy.noun}_id` : undefined;
+  const isSynthetic = (name: string) => name === SYNTHETIC_INTROSPECT_OPERATION || tenancyOperations.has(name);
   const { client, transport } = await connectStdioAdapter(options.server);
 
   try {
@@ -89,7 +94,7 @@ export async function runDifferentialValidation(options: {
     const sourceByName = new Map(sourceOperations.map((operation) => [operation.operation_name, operation]));
     const adapterByName = new Map(adapterOperations.map((operation) => [operation.name, operation]));
     const syntheticOperations = adapterOperations
-      .filter((operation) => operation.name === SYNTHETIC_INTROSPECT_OPERATION && !sourceByName.has(operation.name))
+      .filter((operation) => isSynthetic(operation.name) && !sourceByName.has(operation.name))
       .map((operation) => operation.name);
 
     const missingOperations = sourceOperations
@@ -97,7 +102,7 @@ export async function runDifferentialValidation(options: {
       .map((operation) => operation.operation_name);
 
     const extraOperations = adapterOperations
-      .filter((operation) => operation.name !== SYNTHETIC_INTROSPECT_OPERATION && !sourceByName.has(operation.name))
+      .filter((operation) => !isSynthetic(operation.name) && !sourceByName.has(operation.name))
       .map((operation) => operation.name);
 
     const operations = [];
@@ -126,8 +131,13 @@ export async function runDifferentialValidation(options: {
       }>(firstTextContent(detailResult), `differential detail response for '${operation.operation_name}'`);
       const detail = detailPayload.data?.operation;
       const adapterToolName = detail?.mcpTool ?? detail?.mcp_tool;
-      const adapterParams = new Set((detail?.parameters ?? []).map((parameter) => parameter.name));
       const sourceParams = new Set(operation.params.map((parameter) => parameter.name));
+      const adapterParams = new Set(
+        (detail?.parameters ?? [])
+          .map((parameter) => parameter.name)
+          // The generated per-call tenant parameter is expected on scoped operations.
+          .filter((name) => name !== tenancyParam || sourceParams.has(name)),
+      );
 
       operations.push({
         operation: operation.operation_name,
@@ -158,4 +168,10 @@ export async function runDifferentialValidation(options: {
   } finally {
     await transport.close();
   }
+}
+
+async function loadTenancy(schemaPath: string | undefined): Promise<{ noun: string } | undefined> {
+  if (!schemaPath) return undefined;
+  const schema = parseJsonText<{ tenancy?: { noun?: unknown } }>(await readFile(schemaPath, "utf8"), `adapter schema '${schemaPath}'`);
+  return typeof schema.tenancy?.noun === "string" ? { noun: schema.tenancy.noun } : undefined;
 }
