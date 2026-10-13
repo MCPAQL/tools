@@ -749,9 +749,9 @@ test("mergeOfficialExtraHeaders resolves ${env:VAR} schema header values", (t) =
   );
 });
 
-test("normalize treats server timing fields as volatile", () => {
+test("normalize treats server timing and modification-time fields as volatile", () => {
   assert.deepEqual(
-    normalize({ results: [], duration_ms: 234, search_duration_ms: 12 }),
-    normalize({ results: [], duration_ms: 267, search_duration_ms: 40 }),
+    normalize({ results: [], duration_ms: 234, search_duration_ms: 12, modified_at: "2026-10-13T19:47:11.37Z" }),
+    normalize({ results: [], duration_ms: 267, search_duration_ms: 40, modified_at: "2026-10-13T19:47:11.48Z" }),
   );
 });

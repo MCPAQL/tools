@@ -7,7 +7,7 @@ export interface NormalizeOptions {
 const VOLATILE_KEY_PATTERNS = [
   /(^|_)id$/i, /^node_id$/i, /(^|_)url$/i, /^etag$/i, /^sha$/i,
   /^htmlUrl$/i, /^html_url$/i,
-  /^created_at$/i, /^updated_at$/i, /^pushed_at$/i, /^merged_at$/i, /^closed_at$/i, /^last_modified$/i,
+  /^created_at$/i, /^updated_at$/i, /^modified_at$/i, /^pushed_at$/i, /^merged_at$/i, /^closed_at$/i, /^last_modified$/i,
   /^date$/i,
   /^x-github-/i, /^request_id$/i,
   // Server-side timing fields differ between any two calls and carry no parity signal.
