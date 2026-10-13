@@ -734,3 +734,24 @@ test("firstDiff reports array length and key differences", () => {
     "root: keys differ (only-official: a | only-mcpaql: b)",
   );
 });
+
+test("mergeOfficialExtraHeaders resolves ${env:VAR} schema header values", (t) => {
+  const previous = process.env.PARITY_FIXTURE_PROJECT_ID;
+  t.after(() => {
+    if (previous === undefined) delete process.env.PARITY_FIXTURE_PROJECT_ID;
+    else process.env.PARITY_FIXTURE_PROJECT_ID = previous;
+  });
+  process.env.PARITY_FIXTURE_PROJECT_ID = "project_123";
+
+  assert.deepEqual(
+    mergeOfficialExtraHeaders("test-suite", "TEST_TOKEN", {}, { "X-Project-Id": "${env:PARITY_FIXTURE_PROJECT_ID}" }),
+    { "X-Project-Id": "project_123" },
+  );
+});
+
+test("normalize treats server timing and modification-time fields as volatile", () => {
+  assert.deepEqual(
+    normalize({ results: [], duration_ms: 234, search_duration_ms: 12, modified_at: "2026-10-13T19:47:11.37Z" }),
+    normalize({ results: [], duration_ms: 267, search_duration_ms: 40, modified_at: "2026-10-13T19:47:11.48Z" }),
+  );
+});

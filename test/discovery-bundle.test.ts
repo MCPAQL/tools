@@ -6,7 +6,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import type { DiscoveryBundle } from "../src/types.js";
-import { deepRedact, normalizeSnakeCase } from "../src/shared.js";
+import { deepRedact, normalizeSnakeCase, resolveHeaderEnv } from "../src/shared.js";
 import { classifyEndpoint } from "../src/interrogate.js";
 
 const require = createRequire(import.meta.url);
@@ -99,4 +99,16 @@ test("github discovery bundle validates and preserves provenance-bearing normali
   assert.equal(operation?.endpoint, "UPDATE");
   assert.equal(operation?.provenance.input_schema_present, true);
   assert.equal(operation?.provenance.inference_sources?.endpoint, "heuristic_classification");
+});
+
+test("resolveHeaderEnv expands exact ${env:VAR} header values and leaves others alone", () => {
+  const env = { FIXTURE_PROJECT_ID: "project_123" };
+  assert.deepEqual(
+    resolveHeaderEnv(
+      { "X-Project-Id": "${env:FIXTURE_PROJECT_ID}", "X-MCP-Toolsets": "all", "X-Partial": "a-${env:FIXTURE_PROJECT_ID}" },
+      env,
+    ),
+    { "X-Project-Id": "project_123", "X-MCP-Toolsets": "all", "X-Partial": "a-${env:FIXTURE_PROJECT_ID}" },
+  );
+  assert.throws(() => resolveHeaderEnv({ "X-Project-Id": "${env:MISSING_VAR}" }, env), /MISSING_VAR.*X-Project-Id/);
 });
