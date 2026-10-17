@@ -48,47 +48,62 @@ export function deepRedact<T>(value: T): T {
   return value;
 }
 
-// Well-known credential prefixes: GitHub tokens and fine-grained PATs, OpenAI/Anthropic-style
-// keys, Slack tokens, AWS access key ids.
-const SECRET_VALUE_PREFIX = /^(gh[opus]_|github_pat_|sk-|xox[abprs]-|AKIA[0-9A-Z]{12})/i;
+// Well-known credential prefixes: GitHub tokens and fine-grained PATs, GitLab PATs, OpenAI/
+// Anthropic-style keys, Slack tokens, Google API keys, AWS access key ids. Case-sensitive, so
+// ordinary words ("SK-learn") are not mistaken for keys.
+const SECRET_VALUE_PREFIX = /^(gh[opus]_|github_pat_|glpat-|sk-|xox[abprs]-|AIza[0-9A-Za-z_-]{20}|AKIA[0-9A-Z]{12})/;
 // Token boundaries exclude "-" and "_" so "postgres-sk-..." is not mistaken for an "sk-" key.
-const SECRET_EMBEDDED = /(?<![A-Za-z0-9_-])(?:(?:gh[opus]_|github_pat_|sk-|xox[abprs]-)[A-Za-z0-9_-]+|AKIA[0-9A-Z]{16}(?![A-Za-z0-9]))/g;
-const SECRET_FLAG = /^--?(token|access[-_]?token|api[-_]?key|key|password|passwd|secret|auth|authorization|bearer)$/i;
-const SECRET_FLAG_ASSIGNMENT = /^(--?(?:token|access[-_]?token|api[-_]?key|key|password|passwd|secret|auth|authorization|bearer))=.+$/i;
+const SECRET_EMBEDDED = /(?<![A-Za-z0-9_-])(?:(?:gh[opus]_|github_pat_|glpat-|sk-|xox[abprs]-)[A-Za-z0-9_-]+|AIza[0-9A-Za-z_-]{20,}|AKIA[0-9A-Z]{16}(?![A-Za-z0-9]))/g;
+// URL userinfo, e.g. postgresql://user:password@host
+const URL_USERINFO = /([a-z][a-z0-9+.-]*:\/\/)[^/@\s:]+:[^/@\s]+@/gi;
+// Flag names that carry a secret, including compound forms such as --github-token or --client-secret.
+const SECRET_FLAG_NAME = "--?[\\w-]*(?:token|secret|password|passwd|api[-_]?key|access[-_]?key|private[-_]?key|auth|bearer|credential)[\\w-]*";
+const SECRET_FLAG = new RegExp(`^${SECRET_FLAG_NAME}$`, "i");
+const SECRET_FLAG_ASSIGNMENT = new RegExp(`^(${SECRET_FLAG_NAME})=.+$`, "i");
+// Inline secrets inside a command string: secret flags followed by a value, and NAME=value env prefixes.
+const COMMAND_SECRET_FLAG = new RegExp(`(\\s|^)(${SECRET_FLAG_NAME})(=|\\s+)(?!<redacted>|-)\\S+`, "gi");
+const COMMAND_INLINE_ENV = /(^|\s)([A-Za-z_][A-Za-z0-9_]*)=(?!<redacted>)\S+/g;
 
 function redactEmbedded(value: string): string {
-  return value.replace(SECRET_EMBEDDED, "<redacted>");
+  return value.replace(URL_USERINFO, "$1<redacted>@").replace(SECRET_EMBEDDED, "<redacted>");
 }
 
 /**
  * Stdio launch configs are written into committed discovery bundles and generated adapters,
- * so they are redacted by position, not only by key name: every env value that is not an
+ * so they are redacted by position as well as by key name: every env value that is not an
  * exact "\${env:VAR}" reference, the value after a secret-like flag (or in --flag=value form),
- * and credential-shaped substrings of args and command.
+ * URL userinfo, and credential-shaped substrings of args and command. Other transport keys
+ * get the usual key-name redaction.
  */
 export function redactStdioTransport(transport: Record<string, unknown>): Record<string, unknown> {
-  const output: Record<string, unknown> = { ...transport };
-  if (typeof output.command === "string") {
-    output.command = redactEmbedded(output.command);
+  const output = deepRedact(transport);
+  if (typeof transport.command === "string") {
+    output.command = redactEmbedded(transport.command)
+      .replace(COMMAND_SECRET_FLAG, "$1$2$3<redacted>")
+      .replace(COMMAND_INLINE_ENV, "$1$2=<redacted>");
   }
-  if (Array.isArray(output.args)) {
-    const args = output.args as unknown[];
+  if (Array.isArray(transport.args)) {
+    const args = transport.args as unknown[];
     output.args = args.map((arg, index) => {
       if (typeof arg !== "string") return arg;
       const previous = args[index - 1];
-      if (typeof previous === "string" && SECRET_FLAG.test(previous)) return "<redacted>";
+      // A following flag is not a value: "--no-auth --port 3000" keeps "--port".
+      if (typeof previous === "string" && SECRET_FLAG.test(previous) && !arg.startsWith("-")) return "<redacted>";
       const assignment = SECRET_FLAG_ASSIGNMENT.exec(arg);
       if (assignment) return `${assignment[1]}=<redacted>`;
       return redactEmbedded(arg);
     });
   }
-  if (output.env && typeof output.env === "object" && !Array.isArray(output.env)) {
-    output.env = Object.fromEntries(
-      Object.entries(output.env as Record<string, unknown>).map(([name, value]) => [
-        name,
-        typeof value === "string" && ENV_REFERENCE.test(value) ? value : "<redacted>",
-      ]),
-    );
+  if (transport.env !== undefined) {
+    // Judged on the original values: deepRedact would already have rewritten secret-named keys.
+    output.env = transport.env && typeof transport.env === "object" && !Array.isArray(transport.env)
+      ? Object.fromEntries(
+          Object.entries(transport.env as Record<string, unknown>).map(([name, value]) => [
+            name,
+            typeof value === "string" && ENV_REFERENCE.test(value) ? value : "<redacted>",
+          ]),
+        )
+      : "<redacted>";
   }
   return output;
 }

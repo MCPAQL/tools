@@ -142,6 +142,41 @@ test("stdio env values, secret flag values and credential-shaped args are redact
   }
 });
 
+test("stdio redaction covers extra transport keys, compound secret flags and URL userinfo", () => {
+  const config = {
+    name: "leaky2",
+    server_url: "stdio://leaky2",
+    transport: {
+      type: "stdio",
+      command: "API_KEY=abc123 node server.js --password hunter2 --verbose",
+      args: [
+        "--github-token", "abc123", "--api-token", "t2", "--client-secret", "s3", "--personal-access-token", "p4",
+        "--github-token=abc5", "--access-key", "a7", "postgresql://admin:hunter8@db/prod", "--url=https://user:pw9@h/x",
+        "--no-auth", "--port", "3000", "AIzaSyA1234567890abcdefghij", "glpat-abcdefghij", "SK-learn",
+      ],
+      auth_token: "literal-tok",
+      password: "pw1",
+      headers: { Authorization: "Bearer zzz" },
+      env: ["FOO=hunter3"],
+    },
+  } as unknown as InterrogationConfig;
+  const transport = importToolCatalog({ config, catalogText: "[]" }).source.capture_config_redacted.transport as Record<string, unknown>;
+  assert.equal(transport.command, "API_KEY=<redacted> node server.js --password <redacted> --verbose");
+  assert.deepEqual(transport.args, [
+    "--github-token", "<redacted>", "--api-token", "<redacted>", "--client-secret", "<redacted>", "--personal-access-token", "<redacted>",
+    "--github-token=<redacted>", "--access-key", "<redacted>", "postgresql://<redacted>@db/prod", "--url=https://<redacted>@h/x",
+    "--no-auth", "--port", "3000", "<redacted>", "<redacted>", "SK-learn",
+  ]);
+  assert.equal(transport.auth_token, "<redacted>");
+  assert.equal(transport.password, "<redacted>");
+  assert.deepEqual(transport.headers, { Authorization: "<redacted>" });
+  assert.equal(transport.env, "<redacted>");
+  const serialized = JSON.stringify(transport);
+  for (const secret of ["abc123", "t2\"", "s3\"", "p4\"", "abc5", "a7\"", "hunter", "pw9", "literal-tok", "pw1", "zzz", "AIzaSy", "glpat-"]) {
+    assert.ok(!serialized.includes(secret), `transport leaks ${secret}`);
+  }
+});
+
 test("catalog import records partial pages, strips a BOM and keeps only the file basename", () => {
   const bundle = importToolCatalog({
     config: stdioConfig,
