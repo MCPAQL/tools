@@ -14,6 +14,7 @@ import type {
   InterrogationConfig,
   NormalizedOperation,
 } from "./types.js";
+import { annotationConflicts, classifyFromEffects, readEffectFlags } from "./effects-classification.js";
 import { deepRedact, redactStdioTransport, normalizeSnakeCase, parseJsonText, resolveHeaderEnv, withTimeout, writeJsonFile } from "./shared.js";
 
 const execFileAsync = promisify(execFile);
@@ -175,8 +176,42 @@ function normalizeParams(tool: RawTool): DiscoveryParam[] {
   });
 }
 
-function normalizeTool(tool: RawTool, warnings: DiscoveryWarning[]): NormalizedOperation {
+export interface NormalizeOptions {
+  /** Field holding per-tool effect flags. Defaults to "effects". */
+  effectsField?: string;
+}
+
+// Effect flags, when the upstream publishes them, decide the endpoint and danger level.
+// Otherwise the name and description heuristic applies. Either way, MCP annotations
+// that disagree with the result are surfaced for review.
+function classifyTool(tool: RawTool, options: NormalizeOptions) {
+  const effects = readEffectFlags(tool as unknown as Record<string, unknown>, options.effectsField);
+  if (effects) {
+    const { endpoint, danger, reviewReasons } = classifyFromEffects(effects);
+    return {
+      endpoint,
+      danger,
+      confidence: "high" as const,
+      reviewReasons,
+      conflicts: annotationConflicts(tool.annotations, endpoint),
+      source: "direct_source_metadata" as InferenceSource,
+    };
+  }
   const { endpoint, confidence, reviewReasons } = classifyEndpoint(tool);
+  return {
+    endpoint,
+    danger: classifyDanger(endpoint),
+    confidence,
+    reviewReasons,
+    conflicts: annotationConflicts(tool.annotations, endpoint),
+    source: "heuristic_classification" as InferenceSource,
+  };
+}
+
+function normalizeTool(tool: RawTool, warnings: DiscoveryWarning[], options: NormalizeOptions = {}): NormalizedOperation {
+  const classification = classifyTool(tool, options);
+  const { endpoint, confidence } = classification;
+  const reviewReasons = [...classification.reviewReasons, ...classification.conflicts];
   const params = normalizeParams(tool);
   const normalizedOperationName = normalizeSnakeCase(tool.name);
   const operationNameSource: InferenceSource =
@@ -193,13 +228,23 @@ function normalizeTool(tool: RawTool, warnings: DiscoveryWarning[]): NormalizedO
     });
   }
 
-  for (const reason of reviewReasons) {
+  for (const reason of classification.reviewReasons) {
     warnings.push({
       code: "REVIEW_REQUIRED",
       severity: confidence === "low" ? "warning" : "info",
       message: reason,
       tool: tool.name,
-      heuristic: "endpoint_classification",
+      heuristic: classification.source === "direct_source_metadata" ? "effect_classification" : "endpoint_classification",
+    });
+  }
+
+  for (const conflict of classification.conflicts) {
+    warnings.push({
+      code: "ANNOTATION_CONFLICT",
+      severity: "warning",
+      message: conflict,
+      tool: tool.name,
+      heuristic: "annotation_comparison",
     });
   }
 
@@ -223,7 +268,7 @@ function normalizeTool(tool: RawTool, warnings: DiscoveryWarning[]): NormalizedO
     description: tool.description ?? `Proxy for upstream MCP tool '${tool.name}'.`,
     endpoint,
     endpoint_confidence: confidence,
-    danger_level: classifyDanger(endpoint),
+    danger_level: classification.danger,
     needs_review: reviewReasons.length > 0,
     review_reasons: reviewReasons,
     params,
@@ -241,17 +286,20 @@ function normalizeTool(tool: RawTool, warnings: DiscoveryWarning[]): NormalizedO
       inference_sources: {
         operation_name: operationNameSource,
         description: descriptionSource,
-        endpoint: "heuristic_classification",
-        danger_level: "heuristic_classification",
+        endpoint: classification.source,
+        danger_level: classification.source,
         maps_to: "deterministic_normalization",
       },
     },
   };
 }
 
-export function normalizeTools(tools: RawTool[]): { operations: NormalizedOperation[]; warnings: DiscoveryWarning[] } {
+export function normalizeTools(
+  tools: RawTool[],
+  options: NormalizeOptions = {},
+): { operations: NormalizedOperation[]; warnings: DiscoveryWarning[] } {
   const warnings: DiscoveryWarning[] = [];
-  const operations = tools.map((tool) => normalizeTool(tool, warnings));
+  const operations = tools.map((tool) => normalizeTool(tool, warnings, options));
   return { operations, warnings };
 }
 
@@ -295,7 +343,7 @@ export function assembleBundle(options: {
       tools,
       ...options.rawCaptureExtras,
     },
-    normalized_bundle: normalizeTools(tools),
+    normalized_bundle: normalizeTools(tools, { effectsField: config.classification?.effects_field }),
   };
 }
 

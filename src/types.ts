@@ -36,6 +36,11 @@ export interface InterrogationConfig {
     prefix?: string;
   };
   headers?: Record<string, string>;
+  /** Classification inputs beyond tool names and descriptions. */
+  classification?: {
+    /** Field on each tool holding canonical effect flags (see effects-classification.ts). Defaults to "effects". */
+    effects_field?: string;
+  };
   sample_operations?: Array<{
     tool: string;
     arguments?: Record<string, unknown>;
