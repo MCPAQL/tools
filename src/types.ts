@@ -8,12 +8,26 @@ export type InferenceSource =
   | "heuristic_classification"
   | "manual_override";
 
+export interface StreamableHttpTransportConfig {
+  type: "streamable_http";
+}
+
+/** Launch config for a local stdio MCP server; the generator reads these fields to spawn the upstream. */
+export interface StdioTransportConfig {
+  type: "stdio";
+  command: string;
+  args?: string[];
+  cwd?: string;
+  /** Adapter environment variables copied into the child. */
+  env_passthrough?: string[];
+  /** Fixed child environment values; "${env:VAR}" references are resolved at spawn time. */
+  env?: Record<string, string>;
+}
+
 export interface InterrogationConfig {
   name: string;
   server_url: string;
-  transport: {
-    type: "streamable_http";
-  };
+  transport: StreamableHttpTransportConfig | StdioTransportConfig;
   auth?: {
     type: "bearer";
     token_env?: string;
@@ -89,7 +103,7 @@ export interface DiscoveryBundle {
   source: {
     name: string;
     server_url: string;
-    transport: "streamable_http" | "native-applescript";
+    transport: "streamable_http" | "native-applescript" | "stdio";
     captured_at: string;
     server: {
       name?: string;

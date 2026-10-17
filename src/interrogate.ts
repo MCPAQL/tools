@@ -14,11 +14,11 @@ import type {
   InterrogationConfig,
   NormalizedOperation,
 } from "./types.js";
-import { deepRedact, normalizeSnakeCase, parseJsonText, resolveHeaderEnv, withTimeout, writeJsonFile } from "./shared.js";
+import { deepRedact, redactStdioTransport, normalizeSnakeCase, parseJsonText, resolveHeaderEnv, withTimeout, writeJsonFile } from "./shared.js";
 
 const execFileAsync = promisify(execFile);
 
-interface RawTool {
+export interface RawTool {
   name: string;
   description?: string;
   annotations?: Record<string, unknown>;
@@ -26,6 +26,8 @@ interface RawTool {
     type?: string;
     properties?: Record<string, Record<string, unknown>>;
     required?: string[];
+    $defs?: Record<string, Record<string, unknown>>;
+    definitions?: Record<string, Record<string, unknown>>;
   };
 }
 
@@ -38,8 +40,13 @@ function validateConfig(config: InterrogationConfig): void {
     throw new Error("Interrogation config requires a non-empty 'server_url'.");
   }
 
-  if (config.transport.type !== "streamable_http") {
-    throw new Error(`Unsupported transport type '${config.transport.type}'.`);
+  const transport = config.transport as { type?: unknown; command?: unknown };
+  if (transport.type === "stdio") {
+    if (typeof transport.command !== "string" || !transport.command.trim()) {
+      throw new Error("stdio transport requires a non-empty 'command'.");
+    }
+  } else if (transport.type !== "streamable_http") {
+    throw new Error(`Unsupported transport type '${String(transport.type)}'.`);
   }
 
   if (config.auth?.type === "bearer" && !config.auth.token_env && !config.auth.token_command) {
@@ -121,12 +128,32 @@ function classifyDanger(endpoint: EndpointCategory): DangerLevel {
   }
 }
 
+const LOCAL_REF = /^#\/(\$defs|definitions)\/([^/]+)$/;
+
+// Schema generators (zod, pydantic) often emit properties as local $refs into $defs.
+// Resolve those so a property's type, description and constraints are not lost.
+function resolveLocalRef(entry: Record<string, unknown>, inputSchema: RawTool["inputSchema"]): Record<string, unknown> {
+  let current = entry;
+  for (let depth = 0; depth < 16 && typeof current.$ref === "string"; depth += 1) {
+    const match = LOCAL_REF.exec(current.$ref);
+    const definitions = match ? (match[1] === "$defs" ? inputSchema?.$defs : inputSchema?.definitions) : undefined;
+    const target = definitions && Object.hasOwn(definitions, match![2]) ? definitions[match![2]] : undefined;
+    if (!target || typeof target !== "object") break;
+    const { $ref: _ref, ...siblings } = current;
+    current = { ...target, ...siblings };
+  }
+  return current;
+}
+
 function normalizeParams(tool: RawTool): DiscoveryParam[] {
   const properties = tool.inputSchema?.properties ?? {};
   const required = new Set(tool.inputSchema?.required ?? []);
 
   return Object.entries(properties).map(([name, schema]) => {
-    const entry = schema as Record<string, unknown>;
+    if (!schema || typeof schema !== "object") {
+      throw new Error(`Tool '${tool.name}' has a non-object schema for input property '${name}'.`);
+    }
+    const entry = resolveLocalRef(schema as Record<string, unknown>, tool.inputSchema);
     const enumValues = Array.isArray(entry.enum)
       ? entry.enum.filter((value): value is string => typeof value === "string")
       : undefined;
@@ -222,6 +249,56 @@ function normalizeTool(tool: RawTool, warnings: DiscoveryWarning[]): NormalizedO
   };
 }
 
+export function normalizeTools(tools: RawTool[]): { operations: NormalizedOperation[]; warnings: DiscoveryWarning[] } {
+  const warnings: DiscoveryWarning[] = [];
+  const operations = tools.map((tool) => normalizeTool(tool, warnings));
+  return { operations, warnings };
+}
+
+function redactCaptureConfig(config: InterrogationConfig): Record<string, unknown> {
+  const redacted = deepRedact(config) as unknown as Record<string, unknown>;
+  if (config.transport.type === "stdio") {
+    // Redact from the original so env values are judged before key-name redaction rewrites them.
+    redacted.transport = redactStdioTransport(config.transport as unknown as Record<string, unknown>);
+  }
+  return redacted;
+}
+
+/** Shared by live interrogation and offline catalog import, so both produce the same bundle for the same tools. */
+export function assembleBundle(options: {
+  config: InterrogationConfig;
+  tools: RawTool[];
+  server?: DiscoveryBundle["source"]["server"];
+  capturedAt?: string;
+  rawCaptureExtras?: Record<string, unknown>;
+}): DiscoveryBundle {
+  const { config, tools } = options;
+  return {
+    schema_version: "1.0.0-draft",
+    source: {
+      name: config.name,
+      server_url: config.server_url,
+      transport: config.transport.type,
+      captured_at: options.capturedAt ?? new Date().toISOString(),
+      server: options.server ?? {},
+      auth: {
+        type: config.auth?.type ?? "none",
+        header: config.auth?.header ?? "Authorization",
+        prefix: config.auth?.prefix ?? "Bearer ",
+        token_env: config.auth?.token_env,
+        // Preserve the operator-provided command here for reproducibility; capture_config_redacted is the secrecy boundary.
+        token_command: config.auth?.token_command,
+      },
+      capture_config_redacted: redactCaptureConfig(config),
+    },
+    raw_capture: {
+      tools,
+      ...options.rawCaptureExtras,
+    },
+    normalized_bundle: normalizeTools(tools),
+  };
+}
+
 async function resolveAuthHeaders(config: InterrogationConfig): Promise<Record<string, string>> {
   const headers: Record<string, string> = resolveHeaderEnv(config.headers ?? {});
 
@@ -298,6 +375,9 @@ async function listAllTools(client: Client): Promise<{
 }
 
 export async function interrogateServer(config: InterrogationConfig): Promise<DiscoveryBundle> {
+  if (config.transport.type !== "streamable_http") {
+    throw new Error("Live interrogation supports streamable_http only; for stdio servers, import a tools/list catalog with mcpaql-import-catalog.");
+  }
   const requestHeaders = await resolveAuthHeaders(config);
   const client = new Client({ name: "mcpaql-interrogate", version: "0.1.0" });
   const transport = new StreamableHTTPClientTransport(new URL(config.server_url), {
@@ -309,41 +389,19 @@ export async function interrogateServer(config: InterrogationConfig): Promise<Di
   try {
     await client.connect(transport);
     const toolsCapture = await listAllTools(client);
-    const warnings: DiscoveryWarning[] = [];
-    const operations = toolsCapture.tools.map((tool) => normalizeTool(tool, warnings));
-
-    return {
-      schema_version: "1.0.0-draft",
-      source: {
-        name: config.name,
-        server_url: config.server_url,
-        transport: "streamable_http",
-        captured_at: new Date().toISOString(),
-        server: {
-          name: client.getServerVersion()?.name,
-          version: client.getServerVersion()?.version,
-          title: client.getServerVersion()?.title,
-        },
-        auth: {
-          type: config.auth?.type ?? "none",
-          header: config.auth?.header ?? "Authorization",
-          prefix: config.auth?.prefix ?? "Bearer ",
-          token_env: config.auth?.token_env,
-          // Preserve the operator-provided command here for reproducibility; capture_config_redacted is the secrecy boundary.
-          token_command: config.auth?.token_command,
-        },
-        capture_config_redacted: deepRedact(config) as unknown as Record<string, unknown>,
+    return assembleBundle({
+      config,
+      tools: toolsCapture.tools,
+      server: {
+        name: client.getServerVersion()?.name,
+        version: client.getServerVersion()?.version,
+        title: client.getServerVersion()?.title,
       },
-      raw_capture: {
-        tools: toolsCapture.tools,
+      rawCaptureExtras: {
         list_tools_page_count: toolsCapture.page_count,
         list_tools_pages: toolsCapture.pages,
       },
-      normalized_bundle: {
-        operations,
-        warnings,
-      },
-    };
+    });
   } finally {
     await transport.close();
   }
