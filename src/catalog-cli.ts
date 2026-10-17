@@ -19,7 +19,7 @@ async function main(): Promise<void> {
   const config = await loadConfig(configPath);
   const bundle = importToolCatalog({
     config,
-    catalogText: await readFile(catalogPath, "utf8"),
+    catalogText: await readFile(catalogPath),
     catalogPath,
     server: args["server-name"] || args["server-version"]
       ? { name: args["server-name"], version: args["server-version"] }

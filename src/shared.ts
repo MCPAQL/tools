@@ -41,11 +41,56 @@ export function deepRedact<T>(value: T): T {
     return output as T;
   }
 
-  if (typeof value === "string" && /^gh[opus]_/i.test(value)) {
+  if (typeof value === "string" && SECRET_VALUE_PREFIX.test(value)) {
     return "<redacted>" as T;
   }
 
   return value;
+}
+
+// Well-known credential prefixes: GitHub tokens and fine-grained PATs, OpenAI/Anthropic-style
+// keys, Slack tokens, AWS access key ids.
+const SECRET_VALUE_PREFIX = /^(gh[opus]_|github_pat_|sk-|xox[abprs]-|AKIA[0-9A-Z]{12})/i;
+// Token boundaries exclude "-" and "_" so "postgres-sk-..." is not mistaken for an "sk-" key.
+const SECRET_EMBEDDED = /(?<![A-Za-z0-9_-])(?:(?:gh[opus]_|github_pat_|sk-|xox[abprs]-)[A-Za-z0-9_-]+|AKIA[0-9A-Z]{16}(?![A-Za-z0-9]))/g;
+const SECRET_FLAG = /^--?(token|access[-_]?token|api[-_]?key|key|password|passwd|secret|auth|authorization|bearer)$/i;
+const SECRET_FLAG_ASSIGNMENT = /^(--?(?:token|access[-_]?token|api[-_]?key|key|password|passwd|secret|auth|authorization|bearer))=.+$/i;
+
+function redactEmbedded(value: string): string {
+  return value.replace(SECRET_EMBEDDED, "<redacted>");
+}
+
+/**
+ * Stdio launch configs are written into committed discovery bundles and generated adapters,
+ * so they are redacted by position, not only by key name: every env value that is not an
+ * exact "\${env:VAR}" reference, the value after a secret-like flag (or in --flag=value form),
+ * and credential-shaped substrings of args and command.
+ */
+export function redactStdioTransport(transport: Record<string, unknown>): Record<string, unknown> {
+  const output: Record<string, unknown> = { ...transport };
+  if (typeof output.command === "string") {
+    output.command = redactEmbedded(output.command);
+  }
+  if (Array.isArray(output.args)) {
+    const args = output.args as unknown[];
+    output.args = args.map((arg, index) => {
+      if (typeof arg !== "string") return arg;
+      const previous = args[index - 1];
+      if (typeof previous === "string" && SECRET_FLAG.test(previous)) return "<redacted>";
+      const assignment = SECRET_FLAG_ASSIGNMENT.exec(arg);
+      if (assignment) return `${assignment[1]}=<redacted>`;
+      return redactEmbedded(arg);
+    });
+  }
+  if (output.env && typeof output.env === "object" && !Array.isArray(output.env)) {
+    output.env = Object.fromEntries(
+      Object.entries(output.env as Record<string, unknown>).map(([name, value]) => [
+        name,
+        typeof value === "string" && ENV_REFERENCE.test(value) ? value : "<redacted>",
+      ]),
+    );
+  }
+  return output;
 }
 
 export function firstTextContent(result: unknown): string {

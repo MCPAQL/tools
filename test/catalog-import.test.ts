@@ -52,6 +52,22 @@ const stdioConfig: InterrogationConfig = {
   },
 };
 
+const leakyConfig: InterrogationConfig = {
+  name: "leaky",
+  server_url: "stdio://leaky",
+  transport: {
+    type: "stdio",
+    command: "server --token ghp_abc123 --verbose",
+    args: ["--api-key", "sk-live-123", "--token=abc123", "--mode", "fast", "postgres-sk-not-a-key", "github_pat_11ABC"],
+    env: {
+      OPENAI_API_KEY: "sk-live-123",
+      DATABASE_URL: "postgres://u:pw@h/db",
+      AWS_ACCESS_KEY_ID: "AKIAABCDEFGHIJKLMNOP",
+      FROM_ENV: "${env:SOURCE}",
+    },
+  },
+};
+
 test("parseToolCatalog accepts tools/list results, bare arrays and vendor catalogs", () => {
   assert.equal(parseToolCatalog({ tools }).format, "tools_list");
   assert.equal(parseToolCatalog(tools).format, "tool_array");
@@ -61,15 +77,23 @@ test("parseToolCatalog accepts tools/list results, bare arrays and vendor catalo
   assert.throws(() => parseToolCatalog([tools[0], tools[0]]), /more than once/);
 });
 
-test("measureCatalogFootprint reports exact compact-JSON sizes", () => {
-  const footprint = measureCatalogFootprint(tools as RawTool[]);
+test("measureCatalogFootprint sizes whole tools/list entries and only wire fields of vendor catalogs", () => {
   const wire = (tool: Record<string, unknown>) =>
-    JSON.stringify(Object.fromEntries(["name", "title", "description", "inputSchema", "outputSchema", "annotations"]
+    JSON.stringify(Object.fromEntries(["name", "title", "description", "inputSchema", "outputSchema", "annotations", "icons", "execution", "_meta"]
       .filter((key) => tool[key] !== undefined).map((key) => [key, tool[key]])));
+  assert.equal(
+    measureCatalogFootprint(tools as RawTool[], "tools_list").total_chars,
+    JSON.stringify(tools[0]).length + JSON.stringify(tools[1]).length,
+  );
+  const withMeta = [{ ...tools[0], _meta: { "example/x": "y".repeat(100) } }] as unknown as RawTool[];
+  assert.equal(measureCatalogFootprint(withMeta, "catalog").total_chars, wire(withMeta[0] as unknown as Record<string, unknown>).length);
+  assert.equal(measureCatalogFootprint([{ name: "q", description: 'a\n"b"' }] as RawTool[]).description_chars, JSON.stringify('a\n"b"').length);
+
+  const footprint = measureCatalogFootprint(tools as RawTool[], "catalog");
   assert.deepEqual(footprint, {
     tool_count: 2,
     total_chars: wire(tools[0]).length + wire(tools[1]).length,
-    description_chars: "Inspect one binary".length + "Run the target".length,
+    description_chars: JSON.stringify("Inspect one binary").length + JSON.stringify("Run the target").length,
     input_schema_chars: JSON.stringify(tools[0].inputSchema).length + JSON.stringify(tools[1].inputSchema).length,
     output_schema_chars: JSON.stringify(tools[0].outputSchema).length,
   });
@@ -99,6 +123,63 @@ test("stdio launch config survives redaction except literal secret values", () =
   assert.equal(transport.command, "npx");
   assert.deepEqual(transport.args, ["-y", "example-mcp@1.2.3", "mcp"]);
   assert.deepEqual(transport.env, { EXAMPLE_SECRET: "${env:EXAMPLE_SECRET_SOURCE}", EXAMPLE_PASSWORD: "<redacted>" });
+});
+
+test("stdio env values, secret flag values and credential-shaped args are redacted", () => {
+  const transport = importToolCatalog({ config: leakyConfig, catalogText: JSON.stringify(tools) })
+    .source.capture_config_redacted.transport as Record<string, unknown>;
+  assert.equal(transport.command, "server --token <redacted> --verbose");
+  assert.deepEqual(transport.args, ["--api-key", "<redacted>", "--token=<redacted>", "--mode", "fast", "postgres-sk-not-a-key", "<redacted>"]);
+  assert.deepEqual(transport.env, {
+    OPENAI_API_KEY: "<redacted>",
+    DATABASE_URL: "<redacted>",
+    AWS_ACCESS_KEY_ID: "<redacted>",
+    FROM_ENV: "${env:SOURCE}",
+  });
+  const serialized = JSON.stringify(importToolCatalog({ config: leakyConfig, catalogText: "[]" }));
+  for (const secret of ["sk-live-123", "abc123", "pw@h", "AKIAABCDEFGHIJKLMNOP", "github_pat_11ABC", "ghp_abc123"]) {
+    assert.ok(!serialized.includes(secret), `bundle leaks ${secret}`);
+  }
+});
+
+test("catalog import records partial pages, strips a BOM and keeps only the file basename", () => {
+  const bundle = importToolCatalog({
+    config: stdioConfig,
+    catalogText: `\uFEFF${JSON.stringify({ tools, nextCursor: "page-2" })}`,
+    catalogPath: "/home/someone/captures/tools.json",
+  });
+  const source = bundle.raw_capture.catalog_source as Record<string, unknown>;
+  assert.equal(source.file, "tools.json");
+  assert.equal(source.next_cursor, "page-2");
+  assert.ok(bundle.normalized_bundle.warnings.some((warning) => warning.code === "CATALOG_PARTIAL"));
+  assert.ok(!JSON.stringify(bundle).includes("/home/someone"));
+});
+
+test("a non-object input property schema fails with a clear error", () => {
+  const bad = [{ name: "bad", inputSchema: { type: "object", properties: { x: null } } }];
+  assert.throws(() => importToolCatalog({ config: stdioConfig, catalogText: JSON.stringify(bad) }), /non-object schema for input property 'x'/);
+});
+
+test("$ref resolution ignores inherited names and survives cycles", () => {
+  const refTools = [{
+    name: "refs",
+    inputSchema: {
+      type: "object",
+      $defs: { a: { $ref: "#/$defs/b" }, b: { $ref: "#/$defs/a" } },
+      definitions: { n: { type: "integer", minimum: 1 } },
+      properties: {
+        cyclic: { $ref: "#/$defs/a" },
+        inherited: { $ref: "#/$defs/__proto__" },
+        legacy: { $ref: "#/definitions/n" },
+      },
+    },
+  }];
+  const params = importToolCatalog({ config: stdioConfig, catalogText: JSON.stringify(refTools) }).normalized_bundle.operations[0].params;
+  const byName = Object.fromEntries(params.map((param) => [param.name, param]));
+  assert.equal(byName.cyclic.type, "object");
+  assert.equal(byName.inherited.type, "object");
+  assert.equal(byName.legacy.type, "integer");
+  assert.equal(byName.legacy.minimum, 1);
 });
 
 test("offline import normalizes exactly like live interrogation for the same tools", () => {

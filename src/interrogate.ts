@@ -14,7 +14,7 @@ import type {
   InterrogationConfig,
   NormalizedOperation,
 } from "./types.js";
-import { deepRedact, normalizeSnakeCase, parseJsonText, resolveHeaderEnv, withTimeout, writeJsonFile } from "./shared.js";
+import { deepRedact, redactStdioTransport, normalizeSnakeCase, parseJsonText, resolveHeaderEnv, withTimeout, writeJsonFile } from "./shared.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -136,8 +136,9 @@ function resolveLocalRef(entry: Record<string, unknown>, inputSchema: RawTool["i
   let current = entry;
   for (let depth = 0; depth < 16 && typeof current.$ref === "string"; depth += 1) {
     const match = LOCAL_REF.exec(current.$ref);
-    const target = match ? (match[1] === "$defs" ? inputSchema?.$defs : inputSchema?.definitions)?.[match[2]] : undefined;
-    if (!target) break;
+    const definitions = match ? (match[1] === "$defs" ? inputSchema?.$defs : inputSchema?.definitions) : undefined;
+    const target = definitions && Object.hasOwn(definitions, match![2]) ? definitions[match![2]] : undefined;
+    if (!target || typeof target !== "object") break;
     const { $ref: _ref, ...siblings } = current;
     current = { ...target, ...siblings };
   }
@@ -149,6 +150,9 @@ function normalizeParams(tool: RawTool): DiscoveryParam[] {
   const required = new Set(tool.inputSchema?.required ?? []);
 
   return Object.entries(properties).map(([name, schema]) => {
+    if (!schema || typeof schema !== "object") {
+      throw new Error(`Tool '${tool.name}' has a non-object schema for input property '${name}'.`);
+    }
     const entry = resolveLocalRef(schema as Record<string, unknown>, tool.inputSchema);
     const enumValues = Array.isArray(entry.enum)
       ? entry.enum.filter((value): value is string => typeof value === "string")
@@ -251,6 +255,15 @@ export function normalizeTools(tools: RawTool[]): { operations: NormalizedOperat
   return { operations, warnings };
 }
 
+function redactCaptureConfig(config: InterrogationConfig): Record<string, unknown> {
+  const redacted = deepRedact(config) as unknown as Record<string, unknown>;
+  if (config.transport.type === "stdio") {
+    // Redact from the original so env values are judged before key-name redaction rewrites them.
+    redacted.transport = redactStdioTransport(config.transport as unknown as Record<string, unknown>);
+  }
+  return redacted;
+}
+
 /** Shared by live interrogation and offline catalog import, so both produce the same bundle for the same tools. */
 export function assembleBundle(options: {
   config: InterrogationConfig;
@@ -276,7 +289,7 @@ export function assembleBundle(options: {
         // Preserve the operator-provided command here for reproducibility; capture_config_redacted is the secrecy boundary.
         token_command: config.auth?.token_command,
       },
-      capture_config_redacted: deepRedact(config) as unknown as Record<string, unknown>,
+      capture_config_redacted: redactCaptureConfig(config),
     },
     raw_capture: {
       tools,
