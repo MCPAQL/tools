@@ -102,6 +102,34 @@ test("incomplete or malformed effect flags never lower the classification", () =
     assert.ok(operation.review_reasons.some((reason) => /Effect flags are incomplete/.test(reason)));
   }
   assert.ok(warnings.some((warning) => warning.tool === "run_shell" && /unknown: executesForeignCode/.test(warning.message)));
+
+  // Published gating flags still count when others are missing.
+  const partial = normalizeTools([
+    { name: "get_trace", description: "Trace", effects: { executesForeignCode: true } },
+    { name: "list_devices", description: "List", effects: { mutatesDevice: true, mayDiscardData: true } },
+    { name: "get_x", description: "Get", effects: { ...none, executesForeignCode: null } },
+  ] as unknown as RawTool[]).operations;
+  assert.deepEqual(partial.map((operation) => [operation.endpoint, operation.danger_level]), [
+    ["EXECUTE", "dangerous"],
+    ["EXECUTE", "dangerous"],
+    ["READ", "safe"],
+  ]);
+  assert.ok(partial.every((operation) => operation.endpoint_confidence === "low"));
+});
+
+test("an _meta effects path takes the rest as one reverse-DNS key, and an unused field is reported", () => {
+  const tools = [{ name: "list_devices", description: "List", _meta: { "com.example/effects": { ...none, mutatesDevice: true } } }] as unknown as RawTool[];
+  assert.equal(normalizeTools(tools, { effectsField: "_meta.com.example/effects" }).operations[0].endpoint, "EXECUTE");
+
+  const unused = normalizeTools(tools, { effectsField: "_meta.org.other/effects" });
+  assert.equal(unused.operations[0].endpoint, "READ");
+  assert.ok(unused.warnings.some((warning) => warning.code === "EFFECTS_FIELD_UNUSED"));
+  assert.ok(!normalizeTools(tools).warnings.some((warning) => warning.code === "EFFECTS_FIELD_UNUSED"));
+});
+
+test("heuristic-only review notes keep their severity", () => {
+  const { warnings } = normalizeTools([{ name: "merge_branch", description: "Merge" }] as RawTool[]);
+  assert.ok(warnings.filter((warning) => warning.code === "REVIEW_REQUIRED").every((warning) => warning.severity === "info"));
 });
 
 test("tools without effects get annotation conflicts too", () => {

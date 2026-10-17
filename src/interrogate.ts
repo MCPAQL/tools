@@ -14,7 +14,7 @@ import type {
   InterrogationConfig,
   NormalizedOperation,
 } from "./types.js";
-import { annotationConflicts, classifyFromEffects, readEffectFlags } from "./effects-classification.js";
+import { annotationConflicts, classifyFromEffects, moreSevere, readEffectFlags } from "./effects-classification.js";
 import { deepRedact, redactStdioTransport, normalizeSnakeCase, parseJsonText, resolveHeaderEnv, withTimeout, writeJsonFile } from "./shared.js";
 
 const execFileAsync = promisify(execFile);
@@ -197,17 +197,28 @@ function classifyTool(tool: RawTool, options: NormalizeOptions) {
       source: "direct_source_metadata" as InferenceSource,
     };
   }
-  // Incomplete effects never lower a classification: fall back to the heuristic and say why.
-  const { endpoint, confidence, reviewReasons } = classifyEndpoint(tool);
-  const danger = classifyDanger(endpoint);
+  const heuristic = classifyEndpoint(tool);
+  const fromName = { endpoint: heuristic.endpoint, danger: classifyDanger(heuristic.endpoint), reviewReasons: heuristic.reviewReasons };
+  if (!effects) {
+    return {
+      ...fromName,
+      confidence: heuristic.confidence,
+      conflicts: annotationConflicts(tool.annotations, fromName.endpoint, fromName.danger),
+      source: "heuristic_classification" as InferenceSource,
+    };
+  }
+  // Incomplete effects never lower a classification: flags the upstream did publish still
+  // count, so take the more severe of the name heuristic and the published flags.
+  const chosen = moreSevere(fromName, classifyFromEffects(effects.flags));
   return {
-    endpoint,
-    danger,
-    confidence: effects ? "low" as const : confidence,
-    reviewReasons: effects
-      ? [`Effect flags are incomplete (unknown: ${effects.unknown.join(", ")}); classified by name heuristic instead.`, ...reviewReasons]
-      : reviewReasons,
-    conflicts: annotationConflicts(tool.annotations, endpoint, danger),
+    endpoint: chosen.endpoint,
+    danger: chosen.danger,
+    confidence: "low" as const,
+    reviewReasons: [
+      `Effect flags are incomplete (unknown: ${effects.unknown.join(", ")}); classified as the more severe of the name heuristic and the published flags.`,
+      ...chosen.reviewReasons,
+    ],
+    conflicts: annotationConflicts(tool.annotations, chosen.endpoint, chosen.danger),
     source: "heuristic_classification" as InferenceSource,
   };
 }
@@ -235,7 +246,10 @@ function normalizeTool(tool: RawTool, warnings: DiscoveryWarning[], options: Nor
   for (const reason of classification.reviewReasons) {
     warnings.push({
       code: "REVIEW_REQUIRED",
-      severity: confidence === "low" || classification.danger === "destructive" || classification.danger === "dangerous" ? "warning" : "info",
+      severity: confidence === "low"
+        || (classification.source === "direct_source_metadata" && (classification.danger === "destructive" || classification.danger === "dangerous"))
+        ? "warning"
+        : "info",
       message: reason,
       tool: tool.name,
       heuristic: classification.source === "direct_source_metadata" ? "effect_classification" : "endpoint_classification",
@@ -304,6 +318,15 @@ export function normalizeTools(
 ): { operations: NormalizedOperation[]; warnings: DiscoveryWarning[] } {
   const warnings: DiscoveryWarning[] = [];
   const operations = tools.map((tool) => normalizeTool(tool, warnings, options));
+  if (options.effectsField && tools.length > 0
+    && !tools.some((tool) => readEffectFlags(tool as unknown as Record<string, unknown>, options.effectsField))) {
+    warnings.push({
+      code: "EFFECTS_FIELD_UNUSED",
+      severity: "warning",
+      message: `classification.effects_field '${options.effectsField}' matched no tool; every tool was classified by name heuristic.`,
+      heuristic: "effect_classification",
+    });
+  }
   return { operations, warnings };
 }
 

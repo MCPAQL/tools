@@ -50,9 +50,11 @@ export interface EffectClassification {
 }
 
 function fieldValue(tool: Record<string, unknown>, field: string): unknown {
-  // A dotted path reaches vendor metadata, e.g. "_meta.example/effects".
+  // "_meta.<key>" reaches vendor metadata. MCP _meta keys are reverse-DNS prefixed
+  // ("com.example/effects"), so everything after "_meta." is one key.
+  const segments = field.startsWith("_meta.") ? ["_meta", field.slice("_meta.".length)] : field.split(".");
   let current: unknown = tool;
-  for (const segment of field.split(".")) {
+  for (const segment of segments) {
     if (!current || typeof current !== "object" || Array.isArray(current)) return undefined;
     current = Object.hasOwn(current, segment) ? (current as Record<string, unknown>)[segment] : undefined;
   }
@@ -71,6 +73,16 @@ export function readEffectFlags(tool: Record<string, unknown>, field = "effects"
   if (Object.keys(flags).length === 0 && !GATING_FLAGS.some((flag) => flag in record)) return undefined;
   const unknown = GATING_FLAGS.filter((flag) => typeof record[flag] !== "boolean");
   return { flags, complete: unknown.length === 0, unknown };
+}
+
+const SEVERITY: Record<EndpointCategory, number> = { READ: 0, CREATE: 1, UPDATE: 2, DELETE: 3, EXECUTE: 4 };
+const DANGER_SEVERITY: Record<DangerLevel, number> = { safe: 0, reversible: 1, destructive: 2, dangerous: 3, forbidden: 4 };
+
+/** The more severe of two classifications: by danger level, then by endpoint. */
+export function moreSevere<T extends { endpoint: EndpointCategory; danger: DangerLevel }>(a: T, b: T): T {
+  const byDanger = DANGER_SEVERITY[a.danger] - DANGER_SEVERITY[b.danger];
+  if (byDanger !== 0) return byDanger > 0 ? a : b;
+  return SEVERITY[a.endpoint] >= SEVERITY[b.endpoint] ? a : b;
 }
 
 export function classifyFromEffects(effects: EffectFlags): EffectClassification {
