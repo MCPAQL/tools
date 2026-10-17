@@ -38,7 +38,12 @@ export interface InterrogationConfig {
   headers?: Record<string, string>;
   /** Classification inputs beyond tool names and descriptions. */
   classification?: {
-    /** Field on each tool holding canonical effect flags (see effects-classification.ts). Defaults to "effects". */
+    /**
+     * Field on each tool holding canonical effect flags (see effects-classification.ts); a dotted
+     * path such as "_meta.example/effects" reaches vendor metadata. Defaults to "effects".
+     * Top-level vendor fields survive only in catalog import: MCP clients strip unknown tool keys
+     * during live interrogation, so for live servers the flags must sit under _meta.
+     */
     effects_field?: string;
   };
   sample_operations?: Array<{

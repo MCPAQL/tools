@@ -186,24 +186,28 @@ export interface NormalizeOptions {
 // that disagree with the result are surfaced for review.
 function classifyTool(tool: RawTool, options: NormalizeOptions) {
   const effects = readEffectFlags(tool as unknown as Record<string, unknown>, options.effectsField);
-  if (effects) {
-    const { endpoint, danger, reviewReasons } = classifyFromEffects(effects);
+  if (effects?.complete) {
+    const { endpoint, danger, reviewReasons } = classifyFromEffects(effects.flags);
     return {
       endpoint,
       danger,
       confidence: "high" as const,
       reviewReasons,
-      conflicts: annotationConflicts(tool.annotations, endpoint),
+      conflicts: annotationConflicts(tool.annotations, endpoint, danger),
       source: "direct_source_metadata" as InferenceSource,
     };
   }
+  // Incomplete effects never lower a classification: fall back to the heuristic and say why.
   const { endpoint, confidence, reviewReasons } = classifyEndpoint(tool);
+  const danger = classifyDanger(endpoint);
   return {
     endpoint,
-    danger: classifyDanger(endpoint),
-    confidence,
-    reviewReasons,
-    conflicts: annotationConflicts(tool.annotations, endpoint),
+    danger,
+    confidence: effects ? "low" as const : confidence,
+    reviewReasons: effects
+      ? [`Effect flags are incomplete (unknown: ${effects.unknown.join(", ")}); classified by name heuristic instead.`, ...reviewReasons]
+      : reviewReasons,
+    conflicts: annotationConflicts(tool.annotations, endpoint, danger),
     source: "heuristic_classification" as InferenceSource,
   };
 }
@@ -231,7 +235,7 @@ function normalizeTool(tool: RawTool, warnings: DiscoveryWarning[], options: Nor
   for (const reason of classification.reviewReasons) {
     warnings.push({
       code: "REVIEW_REQUIRED",
-      severity: confidence === "low" ? "warning" : "info",
+      severity: confidence === "low" || classification.danger === "destructive" || classification.danger === "dangerous" ? "warning" : "info",
       message: reason,
       tool: tool.name,
       heuristic: classification.source === "direct_source_metadata" ? "effect_classification" : "endpoint_classification",
