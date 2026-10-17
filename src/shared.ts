@@ -13,6 +13,8 @@ export function normalizeSnakeCase(value: string): string {
     .toLowerCase();
 }
 
+const ENV_REFERENCE = /^\$\{env:[A-Za-z_][A-Za-z0-9_]*\}$/;
+
 export function deepRedact<T>(value: T): T {
   if (Array.isArray(value)) {
     return value.map((entry) => deepRedact(entry)) as T;
@@ -27,7 +29,8 @@ export function deepRedact<T>(value: T): T {
         /(authorization|secret|password)/i.test(lowerKey) ||
         (lowerKey.includes("token") && !lowerKey.endsWith("_env"));
 
-      if (redactKey) {
+      // An exact "${env:VAR}" value names where a secret comes from; it is not the secret itself.
+      if (redactKey && !(typeof entry === "string" && ENV_REFERENCE.test(entry))) {
         output[key] = "<redacted>";
         continue;
       }
