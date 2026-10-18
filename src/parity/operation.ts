@@ -7,7 +7,7 @@ import {
   maskVariantTokens,
   WRITE_VARIANT_NORMALIZE_OPTIONS,
 } from "./comparison.js";
-import type { Endpoint, OpResult, OperationSpec, VerifyCallResult, VerifySpec } from "./types.js";
+import type { CallTimeouts, Endpoint, OpResult, OperationSpec, VerifyCallResult, VerifySpec } from "./types.js";
 
 type UntimedOpResult = Omit<OpResult, "ms">;
 
@@ -46,7 +46,7 @@ export async function runOperation<F>(
   upstreamToolNames: Record<string, string>,
   mapping: Record<string, string> | undefined,
   allMappings: Record<string, Record<string, string>>,
-  timeoutMs: number,
+  timeouts: CallTimeouts | number,
 ): Promise<UntimedOpResult> {
   const cat = spec.category;
   if (cat === "SKIP") return { name: spec.name, endpoint, category: cat, cls: "SKIPPED" };
@@ -58,8 +58,8 @@ export async function runOperation<F>(
     const argsMcp = spec.args(fixtures, "mcpaql");
     if (!argsOff || !argsMcp) return { name: spec.name, endpoint, category: cat, cls: "SKIPPED", detail: "missing fixture" };
     const [off, mcp] = await Promise.all([
-      callOfficial(official, upstreamToolName, applyParamMappings(argsOff, mapping), timeoutMs),
-      callMcpaql(mcpaql, endpoint, spec.name, argsMcp, timeoutMs),
+      callOfficial(official, upstreamToolName, applyParamMappings(argsOff, mapping), timeouts),
+      callMcpaql(mcpaql, endpoint, spec.name, argsMcp, timeouts),
     ]);
     const offP = extractOfficialPayload(off.raw);
     const mcpP = extractMcpaqlPayload(mcp.envelope);
@@ -71,8 +71,8 @@ export async function runOperation<F>(
     const argsOff = spec.args(fixtures, "official");
     const argsMcp = spec.args(fixtures, "mcpaql");
     if (!argsOff || !argsMcp) return { name: spec.name, endpoint, category: cat, cls: "SKIPPED", detail: "missing fixture" };
-    const off = await callOfficial(official, upstreamToolName, applyParamMappings(argsOff, mapping), timeoutMs);
-    const mcp = await callMcpaql(mcpaql, endpoint, spec.name, argsMcp, timeoutMs);
+    const off = await callOfficial(official, upstreamToolName, applyParamMappings(argsOff, mapping), timeouts);
+    const mcp = await callMcpaql(mcpaql, endpoint, spec.name, argsMcp, timeouts);
     const offP = extractOfficialPayload(off.raw);
     const mcpP = extractMcpaqlPayload(mcp.envelope);
     const offM = maskVariantTokens(offP), mcpM = maskVariantTokens(mcpP);
@@ -83,14 +83,14 @@ export async function runOperation<F>(
   if (cat === "ONESHOT_WRITE") {
     const argsMcp = spec.args(fixtures, "mcpaql");
     if (!argsMcp) return { name: spec.name, endpoint, category: cat, cls: "SKIPPED", detail: "missing fixture" };
-    const mcp = await callMcpaql(mcpaql, endpoint, spec.name, argsMcp, timeoutMs);
+    const mcp = await callMcpaql(mcpaql, endpoint, spec.name, argsMcp, timeouts);
     const mcpP = extractMcpaqlPayload(mcp.envelope);
     if (!mcp.ok) return { name: spec.name, endpoint, category: cat, cls: "MCPAQL_ERROR", detail: (JSON.stringify(mcpP) ?? "<undefined>").slice(0, 200), mcpaqlOk: false };
     if (spec.verify) {
       const vArgs = spec.verify.args(fixtures, "official");
       if (vArgs) {
         const verifyUpstreamToolName = resolveUpstreamToolName(spec.verify.name, upstreamToolNames);
-        const v = await callOfficial(official, verifyUpstreamToolName, applyParamMappings(vArgs, allMappings[spec.verify.name]), timeoutMs);
+        const v = await callOfficial(official, verifyUpstreamToolName, applyParamMappings(vArgs, allMappings[spec.verify.name]), timeouts);
         const verifyResult: VerifyCallResult = {
           ok: v.ok,
           raw: v.raw,
