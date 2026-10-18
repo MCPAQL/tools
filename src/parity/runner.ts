@@ -5,7 +5,7 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { resolveHeaderEnv, writeJsonFile } from "../shared.js";
 import { DEFAULT_TIMEOUT_MS, loadAdapterMetadata, resolveAdapterPaths } from "./metadata.js";
 import { runOperation } from "./operation.js";
-import type { OpResult, RunOptions, RunReport, Suite } from "./types.js";
+import type { OpResult, ParityClients, RunOptions, RunReport, StdioUpstream, Suite } from "./types.js";
 
 type UntimedOpResult = Omit<OpResult, "ms">;
 type ClosableClient = Pick<Client, "close">;
@@ -14,18 +14,16 @@ export async function runParitySuite<F>(
   suite: Suite<F>,
   options: RunOptions<F>,
 ): Promise<RunReport> {
-  const token = process.env[suite.tokenEnv];
-  if (!token) throw new Error(`Token env var "${suite.tokenEnv}" not set.`);
-  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const upstream = resolveUpstream(suite);
+  const token = suite.tokenEnv ? process.env[suite.tokenEnv] : undefined;
+  if (upstream.transport === "http" && !token) throw new Error(`Token env var "${suite.tokenEnv ?? "<tokenEnv>"}" not set.`);
+  const timeouts = { timeoutMs: options.timeoutMs ?? DEFAULT_TIMEOUT_MS, maxTotalTimeoutMs: options.maxTotalTimeoutMs };
   const adapterPaths = resolveAdapterPaths(options);
   const { schema, adapterOps, paramMappings, upstreamToolNames } = await loadAdapterMetadata(adapterPaths);
 
-  const officialExtraHeaders = mergeOfficialExtraHeaders(
-    suite.name,
-    suite.tokenEnv,
-    suite.upstreamHeaders ?? {},
-    schema.headers ?? {},
-  );
+  const officialExtraHeaders = upstream.transport === "http"
+    ? mergeOfficialExtraHeaders(suite.name, suite.tokenEnv ?? "", suite.upstreamHeaders ?? {}, schema.headers ?? {})
+    : {};
 
   const opSpecs = new Map(suite.operations.map((o) => [o.name, o]));
 
@@ -49,20 +47,40 @@ export async function runParitySuite<F>(
   const totals: Record<string, number> = { TOTAL: 0 };
   const startedAt = new Date().toISOString();
 
+  const clients: ParityClients = { official, mcpaql };
+  let sessionsOpen = false;
+
   try {
-    const officialTransport = new StreamableHTTPClientTransport(new URL(suite.upstreamUrl), {
-      requestInit: { headers: { ...officialExtraHeaders, Authorization: `Bearer ${token}` } },
-    });
+    const officialTransport = upstream.transport === "http"
+      ? new StreamableHTTPClientTransport(new URL(upstream.url), {
+        requestInit: { headers: { ...officialExtraHeaders, Authorization: `Bearer ${token}` } },
+      })
+      : new StdioClientTransport({
+        command: upstream.stdio.command,
+        args: upstream.stdio.args ?? [],
+        cwd: upstream.stdio.cwd,
+        env: harnessEnvironment(upstream.stdio),
+        stderr: "inherit",
+      });
     const mcpaqlTransport = new StdioClientTransport({
       command: "node",
       args: [adapterPaths.adapterServerJs],
       cwd: adapterPaths.adapterCwd,
-      env: { ...process.env, [suite.tokenEnv]: token } as Record<string, string>,
+      env: {
+        ...harnessEnvironment(upstream.transport === "stdio" ? upstream.stdio : undefined),
+        ...(suite.tokenEnv && token ? { [suite.tokenEnv]: token } : {}),
+      },
       stderr: "inherit",
     });
 
     await official.connect(officialTransport);
     await mcpaql.connect(mcpaqlTransport);
+
+    if (suite.openSessions) {
+      // Marked open first, so closeSessions also runs when opening fails partway.
+      sessionsOpen = true;
+      fixtures = await suite.openSessions(fixtures, clients);
+    }
 
     for (const adapterOp of adapterOps) {
       const t0 = Date.now();
@@ -72,7 +90,7 @@ export async function runParitySuite<F>(
         result = { name: adapterOp.name, endpoint: adapterOp.endpoint, category: "SKIP", cls: "SKIPPED", detail: "no suite arg builder" };
       } else {
         try {
-          result = await runOperation(spec, adapterOp.endpoint, fixtures, official, mcpaql, upstreamToolNames, paramMappings[spec.name], paramMappings, timeoutMs);
+          result = await runOperation(spec, adapterOp.endpoint, fixtures, official, mcpaql, upstreamToolNames, paramMappings[spec.name], paramMappings, timeouts);
         } catch (e) {
           result = { name: spec.name, endpoint: adapterOp.endpoint, category: spec.category, cls: "HARNESS_ERROR", detail: `harness exception: ${(e as Error).message}` };
         }
@@ -85,6 +103,9 @@ export async function runParitySuite<F>(
       console.log(`  ${pad(adapterOp.name, 44)} ${pad(timedResult.category, 18)} -> ${timedResult.cls}${timedResult.detail ? " :: " + timedResult.detail.slice(0, 80) : ""}`);
     }
   } finally {
+    if (sessionsOpen && suite.closeSessions) {
+      try { await suite.closeSessions(fixtures, clients); } catch (e) { console.error(`[${suite.name}] closing sessions failed:`, (e as Error).message); }
+    }
     await closeParityClients(official, mcpaql);
     if (!options.skipTeardown && !options.reuseFixtures) {
       try { await suite.teardownFixtures(fixtures); } catch (e) { console.error(`[${suite.name}] teardown failed:`, (e as Error).message); }
@@ -97,7 +118,8 @@ export async function runParitySuite<F>(
     finishedAt: new Date().toISOString(),
     adapterPath: adapterPaths.adapterServerJs,
     label: options.label,
-    upstreamUrl: suite.upstreamUrl,
+    upstreamUrl: upstream.transport === "http" ? upstream.url : `stdio:${upstream.stdio.command}`,
+    upstreamTransport: upstream.transport,
     totals,
     ops,
   };
@@ -105,6 +127,32 @@ export async function runParitySuite<F>(
   console.log(`[${suite.name}] report:`, options.reportPath);
   console.log(`[${suite.name}] totals:`, totals);
   return report;
+}
+
+type ResolvedUpstream =
+  | { transport: "http"; url: string }
+  | { transport: "stdio"; stdio: StdioUpstream };
+
+export function resolveUpstream(suite: Pick<Suite<unknown>, "name" | "upstreamUrl" | "upstreamStdio">): ResolvedUpstream {
+  if (suite.upstreamUrl && suite.upstreamStdio) {
+    throw new Error(`Suite "${suite.name}" sets both upstreamUrl and upstreamStdio; set one.`);
+  }
+  if (suite.upstreamStdio) {
+    if (typeof suite.upstreamStdio.command !== "string" || suite.upstreamStdio.command === "") {
+      throw new Error(`Suite "${suite.name}" upstreamStdio needs a command.`);
+    }
+    return { transport: "stdio", stdio: suite.upstreamStdio };
+  }
+  if (suite.upstreamUrl) return { transport: "http", url: suite.upstreamUrl };
+  throw new Error(`Suite "${suite.name}" needs upstreamUrl or upstreamStdio.`);
+}
+
+// Both arms start from the same environment, so a stdio upstream sees the same variables
+// whether the harness launches it directly or the adapter does.
+function harnessEnvironment(stdio: StdioUpstream | undefined): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const [key, value] of Object.entries(process.env)) if (value !== undefined) env[key] = value;
+  return { ...env, ...(stdio?.env ?? {}) };
 }
 
 export async function writeRunReport(reportPath: string, report: RunReport): Promise<void> {

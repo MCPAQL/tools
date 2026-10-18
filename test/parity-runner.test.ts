@@ -5,14 +5,15 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { promisify } from "node:util";
-import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { Client as SdkClient, type Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import Ajv from "ajv";
 import addFormats from "ajv-formats";
 
-import { callMcpaql } from "../src/parity/calls.js";
+import { callMcpaql, callOfficial } from "../src/parity/calls.js";
 import { loadAdapterMetadata } from "../src/parity/metadata.js";
 import { runOperation } from "../src/parity/operation.js";
-import { closeParityClients, mergeOfficialExtraHeaders, runParitySuite, writeRunReport } from "../src/parity/runner.js";
+import { closeParityClients, mergeOfficialExtraHeaders, resolveUpstream, runParitySuite, writeRunReport } from "../src/parity/runner.js";
 import {
   applyParamMappings,
   buildLlmMetricsReport,
@@ -32,6 +33,7 @@ import {
   writeLlmMetricsMarkdownSummary,
   writeLlmMetricsReport,
   type LlmMetricsReportInput,
+  type Suite,
 } from "../src/parity-runner.js";
 
 const execFile = promisify(execFileCallback);
@@ -192,6 +194,7 @@ test("writeRunReport creates missing report directories", async (t) => {
     finishedAt: "2026-06-03T00:00:01.000Z",
     adapterPath: "/tmp/adapter/dist/server.js",
     upstreamUrl: "https://example.test/mcp",
+    upstreamTransport: "http",
     totals: { TOTAL: 0 },
     ops: [],
   });
@@ -754,4 +757,121 @@ test("normalize treats server timing and modification-time fields as volatile", 
     normalize({ results: [], duration_ms: 234, search_duration_ms: 12, modified_at: "2026-10-13T19:47:11.37Z" }),
     normalize({ results: [], duration_ms: 267, search_duration_ms: 40, modified_at: "2026-10-13T19:47:11.48Z" }),
   );
+});
+
+const STDIO_FIXTURE = path.join(path.dirname(new URL(import.meta.url).pathname), "fixtures", "parity-stdio-servers.mjs");
+
+async function stdioFixtureSchema(t: { after(fn: () => Promise<void>): void }) {
+  const root = await mkdtemp(path.join(tmpdir(), "parity-stdio-"));
+  t.after(async () => { await rm(root, { recursive: true, force: true }); });
+  const schemaPath = path.join(root, "schema.json");
+  await writeFile(schemaPath, JSON.stringify({
+    operations: { create: [{ name: "open_session" }], read: [{ name: "describe_session" }] },
+  }));
+  return { root, schemaPath };
+}
+
+type SessionFixtures = { official?: string; mcpaql?: string; closed?: string[] };
+
+async function openOn(clients: { official: Client; mcpaql: Client }) {
+  const official = await callOfficial(clients.official, "open_session", {}, 5_000);
+  const mcpaql = await callMcpaql(clients.mcpaql, "create", "open_session", {}, 5_000);
+  return {
+    official: (extractOfficialPayload(official.raw) as { session_id: string }).session_id,
+    mcpaql: (extractMcpaqlPayload(mcpaql.envelope) as { session_id: string }).session_id,
+  };
+}
+
+test("runParitySuite runs a stdio upstream with per-arm sessions and no token", async (t) => {
+  const { root, schemaPath } = await stdioFixtureSchema(t);
+  let closedWith: SessionFixtures | undefined;
+  let tornDownWith: SessionFixtures | undefined;
+
+  const report = await runParitySuite<SessionFixtures>(
+    {
+      name: "stdio-suite",
+      upstreamStdio: { command: process.execPath, args: [STDIO_FIXTURE, "upstream"], env: { PARITY_FIXTURE_FLAG: "set" } },
+      operations: [
+        { name: "open_session", category: "SKIP", note: "opened per arm by openSessions" },
+        {
+          name: "describe_session",
+          category: "PURE_READ",
+          args: (fixtures, variant) => ({ session_id: variant === "official" ? fixtures.official : fixtures.mcpaql }),
+        },
+      ].map((op) => ({ args: () => null, ...op })) as Suite<SessionFixtures>["operations"],
+      async setupFixtures() { return {}; },
+      async openSessions(_fixtures, clients) { return openOn(clients); },
+      async closeSessions(fixtures, clients) {
+        closedWith = fixtures;
+        await callOfficial(clients.official, "close_session", { session_id: fixtures.official }, 5_000);
+      },
+      async teardownFixtures(fixtures) { tornDownWith = fixtures; },
+    },
+    { adapterServerJs: STDIO_FIXTURE, schemaPath, reportPath: path.join(root, "report.json") },
+  );
+
+  assert.equal(report.upstreamTransport, "stdio");
+  assert.equal(report.upstreamUrl, `stdio:${process.execPath}`);
+  const describe = report.ops.find((op) => op.name === "describe_session");
+  // session_id differs per arm and is volatile; the suite env reached both arms.
+  assert.equal(describe?.cls, "STRUCTURAL_PARITY", describe?.detail);
+  assert.ok(closedWith?.official && closedWith.mcpaql && closedWith.official !== closedWith.mcpaql);
+  assert.deepEqual(tornDownWith, closedWith);
+});
+
+test("runParitySuite closes sessions when opening them fails partway", async (t) => {
+  const { root, schemaPath } = await stdioFixtureSchema(t);
+  let closedWith: SessionFixtures | undefined;
+  await assert.rejects(
+    () => runParitySuite<SessionFixtures>(
+      {
+        name: "stdio-open-fails",
+        upstreamStdio: { command: process.execPath, args: [STDIO_FIXTURE, "upstream"] },
+        operations: [],
+        async setupFixtures() { return { closed: [] }; },
+        async openSessions(fixtures, clients) {
+          fixtures.official = (await openOn(clients)).official;
+          throw new Error("second session failed");
+        },
+        async closeSessions(fixtures) { closedWith = fixtures; },
+        async teardownFixtures() {},
+      },
+      { adapterServerJs: STDIO_FIXTURE, schemaPath, reportPath: path.join(root, "report.json") },
+    ),
+    /second session failed/,
+  );
+  assert.ok(closedWith?.official, "closeSessions sees the session recorded before the failure");
+});
+
+test("resolveUpstream needs exactly one upstream", () => {
+  assert.throws(() => resolveUpstream({ name: "s" }), /needs upstreamUrl or upstreamStdio/);
+  assert.throws(() => resolveUpstream({ name: "s", upstreamUrl: "https://x.test", upstreamStdio: { command: "x" } }), /sets both/);
+  assert.throws(() => resolveUpstream({ name: "s", upstreamStdio: { command: "" } }), /needs a command/);
+  assert.deepEqual(resolveUpstream({ name: "s", upstreamUrl: "https://x.test" }), { transport: "http", url: "https://x.test" });
+});
+
+test("call timeouts reset on progress, and the max total timeout cancels regardless", async (t) => {
+  const transport = new StdioClientTransport({ command: process.execPath, args: [STDIO_FIXTURE, "upstream"], stderr: "ignore" });
+  const client = new SdkClient({ name: "timeouts", version: "0" });
+  await client.connect(transport);
+  t.after(async () => { await client.close(); });
+
+  const withProgress = await callOfficial(client, "slow", { ms: 700, progress: true }, { timeoutMs: 300 });
+  assert.equal(withProgress.ok, true, withProgress.error);
+
+  const silent = await callOfficial(client, "slow", { ms: 700, progress: false }, { timeoutMs: 300 });
+  assert.equal(silent.ok, false);
+  assert.match(silent.error ?? "", /timed out/i);
+
+  const capped = await callOfficial(client, "slow", { ms: 1_500, progress: true }, { timeoutMs: 300, maxTotalTimeoutMs: 500 });
+  assert.equal(capped.ok, false);
+  assert.match(capped.error ?? "", /max total timeout of 500ms/);
+
+  // Through the adapter arm too: the progress token is forwarded and resets the deadline.
+  const adapterTransport = new StdioClientTransport({ command: process.execPath, args: [STDIO_FIXTURE], stderr: "ignore" });
+  const adapter = new SdkClient({ name: "timeouts-adapter", version: "0" });
+  await adapter.connect(adapterTransport);
+  t.after(async () => { await adapter.close(); });
+  const viaAdapter = await callMcpaql(adapter, "read", "slow", { ms: 700, progress: true }, { timeoutMs: 300 });
+  assert.equal(viaAdapter.ok, true, viaAdapter.error);
 });

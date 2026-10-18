@@ -2,7 +2,7 @@
 //
 // Usage:
 //   mcpaql-parity --suite ./path/to/suite.js --adapter ./path/to/adapter/dist/server.js \
-//                 --report parity.json [--label X] [--timeout-ms 30000] [--no-teardown] \
+//                 --report parity.json [--label X] [--timeout-ms 30000] [--max-total-timeout-ms N] [--no-teardown] \
 //                 [--reuse-fixtures ./fixtures.json]
 
 import {
@@ -25,7 +25,9 @@ Options:
   --schema <path>           Override adapter schema.json path
   --provenance <path>       Override adapter provenance.json path
   --adapter-cwd <path>      Override adapter process working directory
-  --timeout-ms <number>     Per-operation timeout. Default: 30000. Use 0 to disable
+  --timeout-ms <number>     Per-operation timeout, reset by progress. Default: 30000. Use 0 to disable
+  --max-total-timeout-ms <number>
+                            Hard cap per operation regardless of progress; the call is cancelled
   --reuse-fixtures <json>   Reuse fixture JSON instead of running setupFixtures()
   --llm-metrics-input <json>
                             Normalize captured LLM task metrics from this JSON file
@@ -66,6 +68,7 @@ async function main(): Promise<void> {
   const provenancePath = arg("provenance");
   const adapterCwd = arg("adapter-cwd");
   const timeoutMs = parseNumberArg("timeout-ms");
+  const maxTotalTimeoutMs = parseNumberArg("max-total-timeout-ms");
   const reuseFixtures = arg("reuse-fixtures");
   const llmMetricsInputPath = arg("llm-metrics-input");
   const llmMetricsReportPath = arg("llm-metrics-report");
@@ -115,6 +118,7 @@ async function main(): Promise<void> {
     reportPath: resolve(report),
     label,
     timeoutMs,
+    maxTotalTimeoutMs,
     skipTeardown,
     reuseFixtures,
   });
