@@ -24,6 +24,7 @@ export {
   firstDiff,
   maskVariantTokens,
   normalize,
+  upstreamErrorPayload,
 } from "./parity/comparison.js";
 export {
   applyParamMappings,

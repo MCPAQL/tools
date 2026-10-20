@@ -7,6 +7,7 @@ import {
   maskVariantTokens,
   WRITE_VARIANT_NORMALIZE_OPTIONS,
 } from "./comparison.js";
+import type { NormalizeOptions } from "./comparison.js";
 import type { CallTimeouts, Endpoint, OpResult, OperationSpec, VerifyCallResult, VerifySpec } from "./types.js";
 
 type UntimedOpResult = Omit<OpResult, "ms">;
@@ -47,6 +48,7 @@ export async function runOperation<F>(
   mapping: Record<string, string> | undefined,
   allMappings: Record<string, Record<string, string>>,
   timeouts: CallTimeouts | number,
+  normalizeOptions: NormalizeOptions = {},
 ): Promise<UntimedOpResult> {
   const cat = spec.category;
   if (cat === "SKIP") return { name: spec.name, endpoint, category: cat, cls: "SKIPPED" };
@@ -63,7 +65,7 @@ export async function runOperation<F>(
     ]);
     const offP = extractOfficialPayload(off.raw);
     const mcpP = extractMcpaqlPayload(mcp.envelope);
-    const { cls, detail } = classify(off.ok, mcp.ok, offP, mcpP);
+    const { cls, detail } = classify(off.ok, mcp.ok, offP, mcpP, normalizeOptions);
     return { name: spec.name, endpoint, category: cat, cls, detail, officialOk: off.ok, mcpaqlOk: mcp.ok };
   }
 
@@ -76,7 +78,12 @@ export async function runOperation<F>(
     const offP = extractOfficialPayload(off.raw);
     const mcpP = extractMcpaqlPayload(mcp.envelope);
     const offM = maskVariantTokens(offP), mcpM = maskVariantTokens(mcpP);
-    const { cls, detail } = classify(off.ok, mcp.ok, offM, mcpM, WRITE_VARIANT_NORMALIZE_OPTIONS);
+    const { cls, detail } = classify(off.ok, mcp.ok, offM, mcpM, {
+      extraVolatileKeyPatterns: [
+        ...(WRITE_VARIANT_NORMALIZE_OPTIONS.extraVolatileKeyPatterns ?? []),
+        ...(normalizeOptions.extraVolatileKeyPatterns ?? []),
+      ],
+    });
     return { name: spec.name, endpoint, category: cat, cls, detail, officialOk: off.ok, mcpaqlOk: mcp.ok };
   }
 

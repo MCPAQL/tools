@@ -1,4 +1,5 @@
 import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import type { NormalizeOptions } from "./comparison.js";
 
 export type Endpoint = "read" | "create" | "update" | "delete" | "execute";
 
@@ -21,6 +22,8 @@ export type ParityClass =
   | "MCPAQL_ERROR"
   | "HARNESS_ERROR"
   | "BOTH_ERROR"
+  /** Both arms failed, and the adapter passed through the same upstream error the official arm returned. */
+  | "SAME_ERROR"
   | "SKIPPED";
 
 export type ArgBuilder<F> = (
@@ -87,6 +90,11 @@ export interface Suite<F> {
   tokenEnv?: string;
   /** Operations declared by the suite. */
   operations: Array<OperationSpec<F>>;
+  /**
+   * Optional: extra keys to treat as volatile when comparing, for upstream fields that differ
+   * between any two server processes (a process id, a temp path).
+   */
+  normalize?: NormalizeOptions;
   /** Create fixtures (test repos, paired records, etc.) before the run. */
   setupFixtures(): Promise<F>;
   /** Clean up after the run. */
