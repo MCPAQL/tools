@@ -89,7 +89,7 @@ export function extractMcpaqlPayload(envelope: unknown): unknown {
 /**
  * The upstream error an adapter passed through, read the same way as extractOfficialPayload
  * reads the official one: structured content first, then the first text item. Returns
- * undefined when the adapter error does not carry an upstream result (its own validation error).
+ * undefined for any other adapter error, such as its own validation error.
  */
 export function upstreamErrorPayload(mcpaqlPayload: unknown): unknown {
   const error = (mcpaqlPayload as { error?: { code?: string; message?: string; details?: unknown } } | undefined)?.error;
@@ -97,6 +97,9 @@ export function upstreamErrorPayload(mcpaqlPayload: unknown): unknown {
   if (error.code === "UPSTREAM" && typeof error.message === "string") {
     try { return JSON.parse(error.message); } catch { return error.message; }
   }
+  // Only the adapter's upstream wrapper carries the upstream result; any other code is the
+  // adapter's own error, even if its details happen to hold content.
+  if (error.code !== "UPSTREAM_TOOL_ERROR") return undefined;
   const details = error.details as { content?: Array<{ type: string; text?: string }>; structured_content?: unknown } | undefined;
   if (!details || typeof details !== "object") return undefined;
   if (details.structured_content) return details.structured_content;

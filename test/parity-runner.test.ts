@@ -743,6 +743,8 @@ test("classify keeps BOTH_ERROR when the errors differ or the adapter rejected t
   const other = { error: { code: "UPSTREAM_TOOL_ERROR", details: { content: [{ type: "text", text: JSON.stringify({ error: { code: "timeout" } }) }] } } };
   assert.equal(classify(false, false, upstream, other).cls, "BOTH_ERROR");
   assert.equal(classify(false, false, upstream, { error: { code: "VALIDATION_ERROR", message: "bad params" } }).cls, "BOTH_ERROR");
+  const ownErrorWithContent = { error: { code: "VALIDATION_ERROR", details: { structured_content: upstream, content: [{ type: "text", text: JSON.stringify(upstream) }] } } };
+  assert.equal(classify(false, false, upstream, ownErrorWithContent).cls, "BOTH_ERROR");
 });
 
 test("upstreamErrorPayload falls back to raw text that is not JSON", () => {
