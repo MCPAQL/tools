@@ -19,6 +19,7 @@ import {
   buildLlmMetricsReport,
   canonicalize,
   classify,
+  upstreamErrorPayload,
   LLM_METRICS_REPORT_SCHEMA,
   extractMcpaqlPayload,
   extractOfficialPayload,
@@ -721,6 +722,40 @@ test("classify distinguishes both-side and one-side errors", () => {
   assert.equal(classify(false, false, { err: "official" }, { err: "mcpaql" }).cls, "BOTH_ERROR");
   assert.equal(classify(false, true, { err: "official" }, { ok: true }).cls, "OFFICIAL_ERROR");
   assert.equal(classify(true, false, { ok: true }, { err: "mcpaql" }).cls, "MCPAQL_ERROR");
+});
+
+test("classify reports SAME_ERROR when the adapter passes through the official error", () => {
+  const upstream = { error: { code: "capability_unavailable", message: "not declared" } };
+  const wrapped = {
+    error: {
+      code: "UPSTREAM_TOOL_ERROR",
+      message: "Upstream MCP tool 'comment' returned an error.",
+      details: { source_tool: "comment", content: [{ type: "text", text: JSON.stringify(upstream) }], structured_content: null },
+    },
+  };
+  assert.deepEqual(classify(false, false, upstream, wrapped).cls, "SAME_ERROR");
+  assert.equal(classify(false, false, upstream, { error: { code: "UPSTREAM", message: JSON.stringify(upstream) } }).cls, "SAME_ERROR");
+  assert.equal(classify(false, false, upstream, { error: { ...wrapped.error, details: { structured_content: upstream } } }).cls, "SAME_ERROR");
+});
+
+test("classify keeps BOTH_ERROR when the errors differ or the adapter rejected the call itself", () => {
+  const upstream = { error: { code: "capability_unavailable" } };
+  const other = { error: { code: "UPSTREAM_TOOL_ERROR", details: { content: [{ type: "text", text: JSON.stringify({ error: { code: "timeout" } }) }] } } };
+  assert.equal(classify(false, false, upstream, other).cls, "BOTH_ERROR");
+  assert.equal(classify(false, false, upstream, { error: { code: "VALIDATION_ERROR", message: "bad params" } }).cls, "BOTH_ERROR");
+});
+
+test("upstreamErrorPayload falls back to raw text that is not JSON", () => {
+  const wrapped = { error: { code: "UPSTREAM_TOOL_ERROR", details: { content: [{ type: "text", text: "plain failure" }] } } };
+  assert.equal(upstreamErrorPayload(wrapped), "plain failure");
+  assert.equal(upstreamErrorPayload({ error: { code: "VALIDATION_ERROR" } }), undefined);
+});
+
+test("classify applies suite volatile keys to both results and errors", () => {
+  const options = { extraVolatileKeyPatterns: [/(^|_)pid$/i] };
+  assert.equal(classify(true, true, { lineage: { parent_pid: 1 } }, { lineage: { parent_pid: 2 } }, options).cls, "STRUCTURAL_PARITY");
+  const wrapped = { error: { code: "UPSTREAM", message: JSON.stringify({ error: { pid: 2 } }) } };
+  assert.equal(classify(false, false, { error: { pid: 1 } }, wrapped, options).cls, "SAME_ERROR");
 });
 
 test("classify reports a useful first diff for divergent payloads", () => {

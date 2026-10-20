@@ -86,13 +86,38 @@ export function extractMcpaqlPayload(envelope: unknown): unknown {
   return e.data;
 }
 
+/**
+ * The upstream error an adapter passed through, read the same way as extractOfficialPayload
+ * reads the official one: structured content first, then the first text item. Returns
+ * undefined when the adapter error does not carry an upstream result (its own validation error).
+ */
+export function upstreamErrorPayload(mcpaqlPayload: unknown): unknown {
+  const error = (mcpaqlPayload as { error?: { code?: string; message?: string; details?: unknown } } | undefined)?.error;
+  if (!error || typeof error !== "object") return undefined;
+  if (error.code === "UPSTREAM" && typeof error.message === "string") {
+    try { return JSON.parse(error.message); } catch { return error.message; }
+  }
+  const details = error.details as { content?: Array<{ type: string; text?: string }>; structured_content?: unknown } | undefined;
+  if (!details || typeof details !== "object") return undefined;
+  if (details.structured_content) return details.structured_content;
+  const text = details.content?.find((c) => c.type === "text")?.text;
+  if (text === undefined) return undefined;
+  try { return JSON.parse(text); } catch { return text; }
+}
+
 export function classify(
   officialOk: boolean, mcpaqlOk: boolean,
   officialPayload: unknown, mcpaqlPayload: unknown,
   options: NormalizeOptions = {},
 ): { cls: ParityClass; detail?: string } {
   const safe = (x: unknown) => (JSON.stringify(canonicalize(x)) ?? "<undefined>").slice(0, 200);
-  if (!officialOk && !mcpaqlOk) return { cls: "BOTH_ERROR", detail: `official: ${safe(officialPayload)} | mcpaql: ${safe(mcpaqlPayload)}` };
+  if (!officialOk && !mcpaqlOk) {
+    const unwrapped = upstreamErrorPayload(mcpaqlPayload);
+    const same = unwrapped !== undefined
+      && JSON.stringify(canonicalize(normalize(officialPayload, options))) === JSON.stringify(canonicalize(normalize(unwrapped, options)));
+    if (same) return { cls: "SAME_ERROR", detail: safe(officialPayload) };
+    return { cls: "BOTH_ERROR", detail: `official: ${safe(officialPayload)} | mcpaql: ${safe(mcpaqlPayload)}` };
+  }
   if (!officialOk && mcpaqlOk) return { cls: "OFFICIAL_ERROR", detail: safe(officialPayload) };
   if (officialOk && !mcpaqlOk) return { cls: "MCPAQL_ERROR", detail: safe(mcpaqlPayload) };
   const offRaw = JSON.stringify(canonicalize(officialPayload)) ?? "<undefined>";
